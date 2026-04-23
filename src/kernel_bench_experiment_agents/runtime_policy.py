@@ -2,7 +2,8 @@
 
 The launcher keeps one shared tool-private config home per tool under `state/config/`. Those dirs hold
 runtime config, copied auth, helper agents, and any tool-managed local state, while the workspace
-remains free of tool auth/config files.
+remains free of tool auth/config files. Tool runtimes talk to a launcher-owned MCP sidecar through a
+small stdio-to-socket proxy so the real MCP backend can stay outside any future runtime sandbox.
 """
 
 from __future__ import annotations
@@ -17,7 +18,10 @@ from .policy_model import ALLOWED_WEB_DOMAINS, MCP_SERVER_NAME, claude_mcp_tool_
 from .project import ensure_dir, write_text
 
 
-MCP_SERVER_ENV_VARS: tuple[str, ...] = (
+MCP_PROXY_ENV_VARS: tuple[str, ...] = ("KBH_MCP_SOCKET",)
+
+
+MCP_SERVER_CONTEXT_ENV_VARS: tuple[str, ...] = (
     "DATA_ROOT",
     "KBH_WORKSPACE",
     "KBH_CLIENT_TOOL",
@@ -31,7 +35,9 @@ def _python_command() -> str:
     The MCP server must start under the same environment that has the harness installed. Hard-coding
     `python` is fragile when Codex or Claude launch from outside the activated environment.
     """
-    return str(Path(sys.executable).expanduser().resolve())
+    # Preserve the venv entrypoint path instead of resolving symlinks down to the base interpreter.
+    # The resolved base interpreter may not have the harness installed, which breaks `-m ...mcp_proxy`.
+    return str(Path(sys.executable).expanduser())
 
 
 def _copy_if_exists(source: Path, target: Path) -> Path | None:
@@ -70,7 +76,7 @@ def sync_repo_auth_into_shared_tool_state(config_root: Path, *, repo_root: Path 
 def render_codex_config() -> str:
     """Render the shared Codex config that lives under CODEX_HOME."""
     allowed_domains = ", ".join(f'"{domain}"' for domain in ALLOWED_WEB_DOMAINS)
-    env_vars = ", ".join(f'"{name}"' for name in MCP_SERVER_ENV_VARS)
+    env_vars = ", ".join(f'"{name}"' for name in MCP_PROXY_ENV_VARS)
     python_command = json.dumps(_python_command())
     return (
         '# Generated from src/kernel_bench_experiment_agents/runtime_policy.py\n'
@@ -90,7 +96,7 @@ def render_codex_config() -> str:
         'max_depth = 1\n\n'
         f'[mcp_servers.{MCP_SERVER_NAME}]\n'
         f'command = {python_command}\n'
-        'args = ["-m", "kernel_bench_experiment_agents.mcp"]\n'
+        'args = ["-m", "kernel_bench_experiment_agents.mcp_proxy"]\n'
         f'env_vars = [{env_vars}]\n'
         'required = true\n'
         'startup_timeout_sec = 20\n\n'
@@ -128,14 +134,14 @@ def claude_settings_payload() -> dict[str, object]:
 
 
 def claude_user_config_payload() -> dict[str, object]:
-    """Build the shared Claude user config that registers the harness MCP server."""
+    """Build the shared Claude user config that registers the harness MCP proxy."""
     return {
         "mcpServers": {
             MCP_SERVER_NAME: {
                 "type": "stdio",
                 "command": _python_command(),
-                "args": ["-m", "kernel_bench_experiment_agents.mcp"],
-                "env": {name: f"${{{name}:-}}" for name in MCP_SERVER_ENV_VARS},
+                "args": ["-m", "kernel_bench_experiment_agents.mcp_proxy"],
+                "env": {name: f"${{{name}:-}}" for name in MCP_PROXY_ENV_VARS},
             }
         }
     }

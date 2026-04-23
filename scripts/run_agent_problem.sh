@@ -63,6 +63,18 @@ terminate_agent_pipeline() {
   fi
 }
 
+cleanup_mcp_sidecar() {
+  if [[ -n "${MCP_SIDECAR_PID:-}" ]]; then
+    kill -TERM "${MCP_SIDECAR_PID}" 2>/dev/null || true
+    wait "${MCP_SIDECAR_PID}" 2>/dev/null || true
+    MCP_SIDECAR_PID=""
+  fi
+  if [[ -n "${MCP_SOCKET_DIR:-}" && -d "${MCP_SOCKET_DIR}" ]]; then
+    rm -rf "${MCP_SOCKET_DIR}"
+    MCP_SOCKET_DIR=""
+  fi
+}
+
 require_command() {
   local name="$1"
   if ! command -v "${name}" >/dev/null 2>&1; then
@@ -236,18 +248,53 @@ BUDGET_EXHAUSTED_MARKER_PATH="${AGENT_ARTIFACT_DIR}/budget_exhausted_goal_status
 TOOL_CWD="${STATE_ROOT}/cwd/${TOOL}/${RUN_NAME}/level_${LEVEL}/problem_${PROBLEM_ID}"
 rm -rf "${TOOL_CWD}"
 mkdir -p "${TOOL_CWD}"
+SCRATCH_FINAL_MESSAGE_PATH="${TOOL_CWD}/final_message.txt"
+MCP_SOCKET_DIR="$(mktemp -d -p /tmp "kbh-mcp.${TOOL}.XXXXXX")"
+MCP_SOCKET_PATH="${MCP_SOCKET_DIR}/server.sock"
+MCP_SIDECAR_STDOUT_PATH="${AGENT_ARTIFACT_DIR}/mcp_sidecar.stdout.txt"
+MCP_SIDECAR_STDERR_PATH="${AGENT_ARTIFACT_DIR}/mcp_sidecar.stderr.txt"
+MCP_SIDECAR_PID=""
+trap cleanup_mcp_sidecar EXIT
 
-export KBH_WORKSPACE="${WORKSPACE}"
-export KBH_CLIENT_TOOL="${TOOL}"
-export KBH_MCP_EVENTS_PATH="${MCP_EVENTS_PATH}"
+start_mcp_sidecar() {
+  KBH_WORKSPACE="${WORKSPACE}" \
+  KBH_CLIENT_TOOL="${TOOL}" \
+  KBH_MCP_EVENTS_PATH="${MCP_EVENTS_PATH}" \
+  python -m kernel_bench_experiment_agents.mcp_sidecar \
+    --socket "${MCP_SOCKET_PATH}" \
+    >"${MCP_SIDECAR_STDOUT_PATH}" \
+    2>"${MCP_SIDECAR_STDERR_PATH}" &
+  MCP_SIDECAR_PID=$!
+}
+
+wait_for_mcp_sidecar() {
+  local attempts=200
+  while (( attempts > 0 )); do
+    if [[ -S "${MCP_SOCKET_PATH}" ]]; then
+      return 0
+    fi
+    if ! kill -0 "${MCP_SIDECAR_PID}" 2>/dev/null; then
+      echo "Launcher MCP sidecar exited before creating ${MCP_SOCKET_PATH}." >&2
+      [[ -s "${MCP_SIDECAR_STDERR_PATH}" ]] && cat "${MCP_SIDECAR_STDERR_PATH}" >&2
+      return 1
+    fi
+    attempts=$((attempts - 1))
+    sleep 0.1
+  done
+  echo "Timed out waiting for launcher MCP sidecar socket at ${MCP_SOCKET_PATH}." >&2
+  [[ -s "${MCP_SIDECAR_STDERR_PATH}" ]] && cat "${MCP_SIDECAR_STDERR_PATH}" >&2
+  return 1
+}
 
 if [[ "${TOOL}" == "codex" ]]; then
-  echo "Launching Codex from ${TOOL_CWD} with shared CODEX_HOME=${CODEX_HOME} and MCP-backed workspace access" >&2
+  echo "Launching Codex from ${TOOL_CWD} with shared CODEX_HOME=${CODEX_HOME} and launcher-owned MCP sidecar access" >&2
 else
-  echo "Launching Claude Code from ${TOOL_CWD} with shared CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR} and MCP-backed workspace access" >&2
+  echo "Launching Claude Code from ${TOOL_CWD} with shared CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR} and launcher-owned MCP sidecar access" >&2
 fi
 
-rm -f "${EVENTS_PATH}" "${MCP_EVENTS_PATH}" "${FINAL_MESSAGE_PATH}" "${TRACE_PATH}" "${COMPLETION_PATH}" "${WORKSPACE_COMPLETION_PATH}" "${BUDGET_EXHAUSTED_MARKER_PATH}"
+rm -f "${EVENTS_PATH}" "${MCP_EVENTS_PATH}" "${FINAL_MESSAGE_PATH}" "${TRACE_PATH}" "${COMPLETION_PATH}" "${WORKSPACE_COMPLETION_PATH}" "${BUDGET_EXHAUSTED_MARKER_PATH}" "${MCP_SIDECAR_STDOUT_PATH}" "${MCP_SIDECAR_STDERR_PATH}" "${SCRATCH_FINAL_MESSAGE_PATH}"
+start_mcp_sidecar
+wait_for_mcp_sidecar
 
 refresh_goal_status() {
   "${KBHARNESS_CLI}" goal-status \
@@ -315,8 +362,10 @@ if [[ "${TOOL}" == "codex" ]]; then
     --json
   )
   (
-    codex "${CODEX_ARGS[@]}" \
-      --output-last-message "${FINAL_MESSAGE_PATH}" \
+    env -u DATA_ROOT -u KBH_WORKSPACE -u KBH_CLIENT_TOOL -u KBH_MCP_EVENTS_PATH \
+      KBH_MCP_SOCKET="${MCP_SOCKET_PATH}" \
+      codex "${CODEX_ARGS[@]}" \
+      --output-last-message "${SCRATCH_FINAL_MESSAGE_PATH}" \
       "$(cat "${INITIAL_PROMPT_PATH}")" | tee "${EVENTS_PATH}"
   ) &
 else
@@ -329,7 +378,9 @@ else
     --model "${MODEL}"
   )
   (
-    cd "${TOOL_CWD}" && claude "${CLAUDE_ARGS[@]}" \
+    cd "${TOOL_CWD}" && env -u DATA_ROOT -u KBH_WORKSPACE -u KBH_CLIENT_TOOL -u KBH_MCP_EVENTS_PATH \
+      KBH_MCP_SOCKET="${MCP_SOCKET_PATH}" \
+      claude "${CLAUDE_ARGS[@]}" \
       "$(cat "${INITIAL_PROMPT_PATH}")" | tee "${EVENTS_PATH}"
   ) &
 fi
@@ -341,6 +392,11 @@ AGENT_EXIT=$?
 kill "${BUDGET_WATCH_PID}" 2>/dev/null || true
 wait "${BUDGET_WATCH_PID}" 2>/dev/null || true
 set -e
+
+if [[ -f "${SCRATCH_FINAL_MESSAGE_PATH}" ]]; then
+  cp -f "${SCRATCH_FINAL_MESSAGE_PATH}" "${FINAL_MESSAGE_PATH}"
+fi
+cleanup_mcp_sidecar
 
 if [[ ! -f "${COMPLETION_PATH}" ]]; then
   mark_budget_exhausted_if_needed >/dev/null 2>&1 || true

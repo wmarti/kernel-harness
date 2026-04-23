@@ -45,10 +45,11 @@ For one `(run_name, level, problem_id)` tuple, the harness does this:
 2. prepares a fresh self-contained workspace
 3. renders solver-facing docs and compatibility wrapper scripts into that workspace
 4. prepares the shared tool-private config under `state/config/`
-5. launches Codex or Claude from an empty per-problem scratch cwd under `state/cwd/`
-6. gives the model only hosted web search plus the `kernelbench` MCP server for local problem work
-7. records attempts, traces, completion state, and optional profiles
-8. writes the durable record under `archive/<run_name>/level_<level>/problem_<problem_id>/`
+5. starts a launcher-owned MCP sidecar for the problem
+6. launches Codex or Claude from an empty per-problem scratch cwd under `state/cwd/`
+7. gives the model only hosted web search plus the `kernelbench` MCP proxy for local problem work
+8. records attempts, traces, completion state, and optional profiles
+9. writes the durable record under `archive/<run_name>/level_<level>/problem_<problem_id>/`
 
 The solver does not decide measured outcomes. The harness decides, from recorded attempts, whether the best correct solution beat eager PyTorch, `torch.compile`, both, or neither.
 
@@ -96,7 +97,7 @@ Those shared tool dirs are where the harness writes:
 
 - generated Codex `config.toml`
 - generated Claude `settings.json`
-- generated Claude `.claude.json` for MCP server registration
+- generated Claude `.claude.json` for MCP proxy registration
 - Claude keeps bash sandboxing disabled on this cluster-oriented setup; the active client-side guardrail is the Claude permissions allow/deny list plus MCP-only workspace access
 - generated helper-agent definitions for both tools
 - tool-managed local state such as auth/session/history files
@@ -112,7 +113,7 @@ This split is deliberate:
 
 - the workspace should contain only problem files the solver is meant to read or edit
 - tool auth/config should not sit inside the solver-visible workspace
-- traces are **not** recovered from shared tool history files; each problem captures its own streamed `agent/events.jsonl` directly from the launcher and its own `agent/mcp_ir_events.jsonl` from the MCP server
+- traces are **not** recovered from shared tool history files; each problem captures its own streamed `agent/events.jsonl` directly from the launcher and its own `agent/mcp_ir_events.jsonl` from the launcher-owned MCP backend
 
 ## Codex vs Claude local-surface split
 
@@ -125,7 +126,7 @@ Codex keeps its shared user/runtime config under `CODEX_HOME`. The harness gener
 - `state/config/codex/config.toml`
 - `state/config/codex/agents/*.toml`
 
-Codex launches from an empty per-problem cwd under `state/cwd/codex/...`, with the real workspace reachable only through the `kernelbench` MCP server.
+Codex launches from an empty per-problem cwd under `state/cwd/codex/...`, with the real workspace reachable only through the `kernelbench` MCP proxy. The launcher starts the real MCP backend outside the runtime and the runtime connects to it through a Unix socket.
 
 ### Claude
 
@@ -135,16 +136,16 @@ Claude keeps its shared user/runtime config under `CLAUDE_CONFIG_DIR`. The harne
 - `state/config/claude/.claude.json`
 - `state/config/claude/agents/*.md`
 
-Claude also launches from an empty per-problem cwd under `state/cwd/claude/...`, with the real workspace reachable only through the `kernelbench` MCP server.
-The shared `state/config/claude/.claude.json` forwards the minimal per-problem MCP context (`KBH_WORKSPACE`, `KBH_CLIENT_TOOL`, `KBH_MCP_EVENTS_PATH`) into that MCP server explicitly. The rest of the problem assignment comes from workspace metadata and archive provenance, so the launcher does not need to duplicate more environment than that.
+Claude also launches from an empty per-problem cwd under `state/cwd/claude/...`, with the real workspace reachable only through the `kernelbench` MCP proxy. The shared `state/config/claude/.claude.json` forwards only the per-problem socket path (`KBH_MCP_SOCKET`) into that proxy. The launcher-owned sidecar keeps the real MCP backend outside the runtime process tree and gives it the problem context (`DATA_ROOT`, `KBH_WORKSPACE`, `KBH_CLIENT_TOOL`, `KBH_MCP_EVENTS_PATH`).
 
 The practical result is the same for both tools:
 
 - no tool auth/config files in the workspace
 - no direct local problem reads/writes through the client’s normal file tools
+- the real MCP backend sits outside the runtime process tree
 - shared web-search policy and helper-agent definitions
 
-Implementation note: the official Python MCP SDK owns transport, protocol, and initialization. The harness-specific MCP layer under `src/kernel_bench_experiment_agents/mcp/` now only covers context loading, filesystem policy, resources, tool handlers, and the synthetic trace sidecar.
+Implementation note: the official Python MCP SDK still owns transport, protocol, and initialization for the real backend. The harness-specific MCP layer under `src/kernel_bench_experiment_agents/mcp/` covers context loading, filesystem policy, resources, tool handlers, and the synthetic trace sidecar, while a small launcher-owned socket relay and runtime-side stdio proxy bridge the runtime to that backend.
 
 ## Archive contents
 

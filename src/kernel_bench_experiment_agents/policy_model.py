@@ -109,7 +109,6 @@ MCP_TOOL_SPECS: tuple[McpToolSpec, ...] = (
     McpToolSpec(
         name="write_candidate",
         purpose=f"overwrite {CANDIDATE_FILENAME} with new source text",
-        destructive=True,
     ),
     McpToolSpec(
         name="run_candidate",
@@ -134,7 +133,6 @@ MCP_TOOL_SPECS: tuple[McpToolSpec, ...] = (
     McpToolSpec(
         name="complete_problem",
         purpose="record a terminal completion summary",
-        destructive=True,
     ),
 )
 
