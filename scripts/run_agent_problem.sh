@@ -5,7 +5,7 @@
 #
 # Required environment:
 #   TOOL=codex|claude
-#   KERNELBENCH_ROOT=/path/to/KernelBench
+#   KERNELBENCH_ROOT=/path/to/KernelBench  (optional when ./third_party/KernelBench exists)
 #   HARDWARE_NAME=<timings-subdir name, e.g. H100 or H100_tsubame>
 #
 # Common overrides:
@@ -24,10 +24,15 @@ if [[ ! -f "./pyproject.toml" || ! -d "./src/kernel_bench_experiment_agents" ]];
   exit 1
 fi
 
+if [[ -x "./.venv/bin/python" ]]; then
+  export PATH="$(cd "./.venv/bin" && pwd):${PATH}"
+fi
+
 DATA_ROOT="${DATA_ROOT:-.}"
 mkdir -p "${DATA_ROOT}"
 DATA_ROOT="$(cd "${DATA_ROOT}" && pwd)"
 export DATA_ROOT
+BOOTSTRAP_HINT="./scripts/bootstrap_uv.sh"
 
 STATE_ROOT="${DATA_ROOT}/state"
 ARCHIVE_ROOT="${DATA_ROOT}/archive"
@@ -81,6 +86,27 @@ require_command() {
     echo "Required command is not on PATH: ${name}" >&2
     exit 1
   fi
+}
+
+require_harness_command() {
+  local name="$1"
+  if command -v "${name}" >/dev/null 2>&1; then
+    return
+  fi
+  echo "Required command is not on PATH: ${name}" >&2
+  echo "Run ${BOOTSTRAP_HINT} or activate the environment where this harness is installed." >&2
+  exit 1
+}
+
+require_kernelbench_checkout() {
+  if [[ -n "${KERNELBENCH_ROOT:-}" ]]; then
+    return
+  fi
+  if [[ -d "./third_party/KernelBench" ]]; then
+    return
+  fi
+  echo "KernelBench checkout not found. Run ${BOOTSTRAP_HINT} or set KERNELBENCH_ROOT=/path/to/KernelBench." >&2
+  exit 1
 }
 
 visible_gpu_slot_count() {
@@ -144,10 +170,6 @@ if [[ ! "${RUN_NAME}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
   echo "RUN_NAME may contain only ASCII letters, digits, dot, underscore, and hyphen." >&2
   exit 1
 fi
-if [[ -z "${KERNELBENCH_ROOT:-}" ]]; then
-  echo "KERNELBENCH_ROOT must point to the official KernelBench checkout." >&2
-  exit 1
-fi
 if [[ -z "${HARDWARE_NAME}" ]]; then
   echo "HARDWARE_NAME must name the KernelBench timings subdirectory to use." >&2
   exit 1
@@ -155,7 +177,8 @@ fi
 
 require_command python
 require_command flock
-require_command "${KBHARNESS_CLI}"
+require_harness_command "${KBHARNESS_CLI}"
+require_kernelbench_checkout
 if [[ "${SHARED_TOOL_STATE_PREPARED:-0}" != "1" ]]; then
   prepare_shared_tool_state
 fi

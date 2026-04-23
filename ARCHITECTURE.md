@@ -15,7 +15,7 @@ The harness is responsible for:
 - recording attempts, traces, status, completion, and profiler outputs
 - aggregating archived results through `summarize-run`
 
-The harness is **not** responsible for installing KernelBench itself. KernelBench setup belongs to the official KernelBench repository and the active environment you choose to run this harness in.
+The harness is **not** responsible for downloading KernelBench on demand at launch time. The preferred setup is to vendor the official KernelBench repository under `third_party/KernelBench/` and install both repos into the same active environment ahead of time.
 
 ## Documentation audiences
 

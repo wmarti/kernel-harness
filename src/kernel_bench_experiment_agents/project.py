@@ -148,8 +148,13 @@ def build_problem_dir(
 def kernelbench_root(explicit: str | None = None) -> Path:
     candidate = explicit or os.environ.get("KERNELBENCH_ROOT")
     if not candidate:
+        vendored = Path.cwd().expanduser().resolve() / "third_party" / "KernelBench"
+        if vendored.exists():
+            candidate = str(vendored)
+    if not candidate:
         raise RuntimeError(
-            "KERNELBENCH_ROOT is not set. Point it at the official KernelBench checkout."
+            "KERNELBENCH_ROOT is not set. Point it at the official KernelBench checkout, "
+            "or vendor it under ./third_party/KernelBench."
         )
 
     path = Path(candidate).expanduser().resolve()

@@ -13,28 +13,35 @@ At a high level:
 
 For the detailed system contract, archive layout, workspace layout, MCP/config split, and runtime boundary notes, read `ARCHITECTURE.md`.
 
-## Install KernelBench and this harness into the same environment
+## Recommended setup: vendored KernelBench + uv bootstrap
 
-Create and activate the Python environment you want to use for both repos. The important part is that **KernelBench and this harness are installed into the same active environment**.
+The preferred setup is:
+
+- vendor KernelBench under `third_party/KernelBench/` as a git submodule
+- create a local `uv` environment at `./.venv`
+- install **both** KernelBench and this harness into that same environment
+
+From the harness repo root:
 
 Example:
 
 ```bash
-pyenv create <env-name>
-# activate that environment in your shell
-
-cd /path/to/KernelBench
-uv pip install -e .
-
-cd /path/to/kernel-bench-experiment-agents
-uv pip install -e .
+./scripts/bootstrap_uv.sh
+export PATH="$(pwd)/.venv/bin:$PATH"
 ```
 
 This harness assumes:
 
-- the official KernelBench checkout already exists
+- the official KernelBench checkout exists either at `./third_party/KernelBench/` or wherever `KERNELBENCH_ROOT` points
 - the KernelBench timing files already exist for your hardware
 - `KERNELBENCH_TIMINGS_DIR` is optional; set it only when your timing results live outside the default KernelBench timing tree
+
+Notes:
+
+- `scripts/bootstrap_uv.sh` runs `git submodule update --init --recursive third_party/KernelBench`, creates `./.venv`, and installs both editable packages into it with `uv`.
+- When `uv` is missing, the bootstrap script prints the official install command plus the installation docs URL and exits.
+- Set `INSTALL_KERNELBENCH_GPU_EXTRAS=1` when you want the bootstrap script to install `KernelBench[gpu]` as well.
+- The launcher scripts automatically prepend `./.venv/bin` to `PATH` when that local environment exists.
 
 ## Authenticate the agent tools
 
@@ -91,7 +98,6 @@ PROBLEM_ID=1 \
 MODEL=gpt-5.4 \
 TIME_BUDGET_MINUTES=180 \
 PRECISION=bf16 \
-KERNELBENCH_ROOT=/path/to/KernelBench \
 HARDWARE_NAME=H100 \
 ./scripts/run_agent_problem.sh
 ```
@@ -106,9 +112,14 @@ PROBLEM_ID=1 \
 MODEL=opus-4.6 \
 TIME_BUDGET_MINUTES=180 \
 PRECISION=bf16 \
-KERNELBENCH_ROOT=/path/to/KernelBench \
 HARDWARE_NAME=H100 \
 ./scripts/run_agent_problem.sh
+```
+
+If you are **not** using the vendored submodule, add:
+
+```bash
+KERNELBENCH_ROOT=/path/to/KernelBench
 ```
 
 ### Run a contiguous range
@@ -122,7 +133,6 @@ END_PROBLEM_ID=10 \
 MODEL=gpt-5.4 \
 TIME_BUDGET_MINUTES=180 \
 PRECISION=bf16 \
-KERNELBENCH_ROOT=/path/to/KernelBench \
 HARDWARE_NAME=H100 \
 ./scripts/run_agent_range.sh
 ```
@@ -137,7 +147,6 @@ PROBLEM_IDS=1,4,9 \
 MODEL=opus-4.6 \
 TIME_BUDGET_MINUTES=180 \
 PRECISION=bf16 \
-KERNELBENCH_ROOT=/path/to/KernelBench \
 HARDWARE_NAME=H100 \
 ./scripts/run_agent_range.sh
 ```
@@ -147,7 +156,7 @@ HARDWARE_NAME=H100 \
 Submit from the harness repo root. The script itself carries the default `#SBATCH` / `#YBATCH` header block for the common H100 path, so the usual launch is still:
 
 ```bash
-ybatch --export=TOOL=codex,RUN_NAME=kernelbench-codex-h100-v3,LEVEL=1,START_PROBLEM_ID=1,END_PROBLEM_ID=10,MODEL=gpt-5.4,TIME_BUDGET_MINUTES=180,PRECISION=bf16,KERNELBENCH_ROOT=/path/to/KernelBench,HARDWARE_NAME=H100 ./scripts/run_agent_problem.slurm.sh
+ybatch --export=TOOL=codex,RUN_NAME=kernelbench-codex-h100-v3,LEVEL=1,START_PROBLEM_ID=1,END_PROBLEM_ID=10,MODEL=gpt-5.4,TIME_BUDGET_MINUTES=180,PRECISION=bf16,HARDWARE_NAME=H100 ./scripts/run_agent_problem.slurm.sh
 ```
 
 Override those scheduler defaults in the script header or on the submit command when your cluster needs something different. Use `sbatch` instead of `ybatch` on clusters that expose plain Slurm submission.
@@ -174,7 +183,7 @@ These are the main variables worth changing:
 - `PROBLEM_IDS=1,4,9`
 - `TIME_BUDGET_MINUTES=...`
 - `PRECISION=bf16`
-- `KERNELBENCH_ROOT=/path/to/KernelBench`
+- `KERNELBENCH_ROOT=/path/to/KernelBench` when you are not using `./third_party/KernelBench`
 - `HARDWARE_NAME=H100`
 - `KERNELBENCH_TIMINGS_DIR=/path/to/results/timing/<hardware>` when you need a non-default timings location
 - inherited `CUDA_VISIBLE_DEVICES` when you want to pin visible GPUs from the scheduler or shell

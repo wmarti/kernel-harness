@@ -14,6 +14,10 @@ if [[ ! -f "./pyproject.toml" || ! -d "./src/kernel_bench_experiment_agents" ]];
   exit 1
 fi
 
+if [[ -x "./.venv/bin/python" ]]; then
+  export PATH="$(cd "./.venv/bin" && pwd):${PATH}"
+fi
+
 DATA_ROOT="${DATA_ROOT:-.}"
 mkdir -p "${DATA_ROOT}"
 DATA_ROOT="$(cd "${DATA_ROOT}" && pwd)"
