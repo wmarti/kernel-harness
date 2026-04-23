@@ -1,0 +1,531 @@
+#!/usr/bin/env python3
+"""Small repo-local entrypoint for setup and common launch flows."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import shlex
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parent
+DEFAULT_VENV_DIR = REPO_ROOT / ".venv"
+CONFIGURED_PYTHON_FILE = REPO_ROOT / ".kb-python"
+
+
+def shell_join(args: list[str]) -> str:
+    return " ".join(shlex.quote(part) for part in args)
+
+
+def run(cmd: list[str], *, env: dict[str, str] | None = None) -> None:
+    print(f"+ {shell_join(cmd)}")
+    subprocess.run(cmd, cwd=REPO_ROOT, env=env, check=True)
+
+
+def run_capture(cmd: list[str]) -> str:
+    return subprocess.check_output(cmd, cwd=REPO_ROOT, text=True).strip()
+
+
+def uv_setup_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("UV_LINK_MODE", "copy")
+    return env
+
+
+def base_env() -> dict[str, str]:
+    env = os.environ.copy()
+    script_dir = str(REPO_ROOT / "scripts")
+    path_entries = [script_dir]
+    if env.get("PATH"):
+        path_entries.append(env["PATH"])
+    env["PATH"] = os.pathsep.join(path_entries)
+
+    pythonpath_entries = [str(REPO_ROOT / "src")]
+    if env.get("PYTHONPATH"):
+        pythonpath_entries.append(env["PYTHONPATH"])
+    env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
+    return env
+
+
+def ensure_git_submodule() -> None:
+    run(["git", "submodule", "sync", "--recursive"])
+    run(["git", "submodule", "update", "--init", "--recursive", "third_party/KernelBench"])
+
+
+def require_uv() -> None:
+    if shutil.which("uv") is not None:
+        return
+    raise SystemExit(
+        "uv is required for ./kb setup, but it is not installed.\n"
+        "Install it first:\n"
+        "  https://docs.astral.sh/uv/getting-started/installation/\n"
+        "  curl -LsSf https://astral.sh/uv/install.sh | sh"
+    )
+
+
+def python_version_info(python_cmd: list[str]) -> tuple[int, int]:
+    output = run_capture(
+        python_cmd
+        + [
+            "-c",
+            (
+                "import json, sys; "
+                "print(json.dumps({'major': sys.version_info[0], "
+                "'minor': sys.version_info[1]}))"
+            ),
+        ]
+    )
+    import json
+
+    payload = json.loads(output)
+    return int(payload["major"]), int(payload["minor"])
+
+
+def validate_python310(python_cmd: list[str]) -> None:
+    major, minor = python_version_info(python_cmd)
+    if (major, minor) != (3, 10):
+        raise SystemExit(
+            "KernelBench's current pyproject.toml requires Python 3.10.x, but "
+            f"{shell_join(python_cmd)} "
+            f"resolved to Python {major}.{minor}."
+        )
+
+
+def remove_path(path: Path) -> None:
+    if not path.exists() and not path.is_symlink():
+        return
+
+    if path.is_symlink() or path.is_file():
+        path.unlink(missing_ok=True)
+        return
+
+    def _onerror(_func, _value, exc_info):
+        exc = exc_info[1]
+        if isinstance(exc, FileNotFoundError):
+            return
+        raise exc
+
+    shutil.rmtree(path, onerror=_onerror)
+
+
+def repo_absolute_path(path: Path) -> Path:
+    expanded = path.expanduser()
+    if not expanded.is_absolute():
+        expanded = REPO_ROOT / expanded
+    return Path(os.path.abspath(expanded))
+
+
+def looks_like_virtualenv(path: Path) -> bool:
+    return path.is_dir() and (path / "pyvenv.cfg").is_file() and (path / "bin" / "python").exists()
+
+
+def prepare_venv_dir(venv_dir: Path) -> Path:
+    resolved = repo_absolute_path(venv_dir)
+
+    if resolved == REPO_ROOT:
+        raise SystemExit("--venv-dir must not point at the repository root.")
+
+    if not resolved.exists() and not resolved.is_symlink():
+        return resolved
+
+    if resolved == DEFAULT_VENV_DIR:
+        remove_path(resolved)
+        return resolved
+
+    if resolved.is_symlink():
+        raise SystemExit(
+            f"--venv-dir refuses to replace an existing symlink target automatically: {resolved}\n"
+            "Choose a new directory, or remove that path yourself first."
+        )
+
+    if looks_like_virtualenv(resolved):
+        remove_path(resolved)
+        return resolved
+
+    raise SystemExit(
+        f"--venv-dir refuses to replace an existing directory that is not clearly a virtualenv: {resolved}\n"
+        "Choose a new directory, or remove that path yourself first."
+    )
+
+
+def configured_python_path(python_cmd: list[str]) -> str:
+    return run_capture(python_cmd + ["-c", "import os, sys; print(os.path.abspath(sys.executable))"])
+
+
+def write_configured_python(python_cmd: list[str]) -> None:
+    CONFIGURED_PYTHON_FILE.write_text(configured_python_path(python_cmd) + "\n", encoding="utf-8")
+
+
+def install_with_uv(*, python_spec: str, venv_dir: Path, pip_args: list[str], gpu_extras: bool) -> None:
+    require_uv()
+    venv_dir = prepare_venv_dir(venv_dir)
+    uv_env = uv_setup_env()
+    run(["uv", "venv", "--python", python_spec, str(venv_dir)], env=uv_env)
+    venv_python = venv_dir / "bin" / "python"
+    validate_python310([str(venv_python)])
+    kernelbench_target = "./third_party/KernelBench[gpu]" if gpu_extras else "./third_party/KernelBench"
+    run(
+        ["uv", "pip", "install", "--python", str(venv_python), *pip_args, "-e", kernelbench_target],
+        env=uv_env,
+    )
+    run(
+        ["uv", "pip", "install", "--python", str(venv_python), *pip_args, "-e", "."],
+        env=uv_env,
+    )
+
+
+def cmd_setup(args: argparse.Namespace) -> int:
+    ensure_git_submodule()
+    gpu_extras = args.gpu_extras or os.environ.get("INSTALL_KERNELBENCH_GPU_EXTRAS") == "1"
+    venv_dir = repo_absolute_path(args.venv_dir)
+    install_with_uv(
+        python_spec=args.python or "3.10",
+        venv_dir=venv_dir,
+        pip_args=args.pip_arg,
+        gpu_extras=gpu_extras,
+    )
+    write_configured_python([str(venv_dir / "bin" / "python")])
+
+    print()
+    print("Setup complete.")
+    print("Next step:")
+    print("  ./kb run --tool codex --hardware-name H100 --problem-id 1")
+    return 0
+
+
+def env_with_common_overrides(args: argparse.Namespace) -> dict[str, str]:
+    env = base_env()
+    mappings = {
+        "data_root": "DATA_ROOT",
+        "tool": "TOOL",
+        "run_name": "RUN_NAME",
+        "level": "LEVEL",
+        "problem_id": "PROBLEM_ID",
+        "problem_ids": "PROBLEM_IDS",
+        "start_problem_id": "START_PROBLEM_ID",
+        "end_problem_id": "END_PROBLEM_ID",
+        "dataset_src": "DATASET_SRC",
+        "model": "MODEL",
+        "time_budget_minutes": "TIME_BUDGET_MINUTES",
+        "hardware_name": "HARDWARE_NAME",
+        "kernelbench_root": "KERNELBENCH_ROOT",
+        "timings_dir": "KERNELBENCH_TIMINGS_DIR",
+        "precision": "PRECISION",
+        "max_parallel_solvers": "MAX_PARALLEL_SOLVERS",
+    }
+    for field, env_name in mappings.items():
+        value = getattr(args, field, None)
+        if value is not None:
+            env[env_name] = str(value)
+    return env
+
+
+def require_problem_selection(
+    args: argparse.Namespace,
+    *,
+    command_name: str,
+    example: str,
+) -> None:
+    selectors = 0
+    if getattr(args, "problem_id", None) is not None:
+        selectors += 1
+    if getattr(args, "problem_ids", None):
+        selectors += 1
+    if getattr(args, "start_problem_id", None) is not None or getattr(args, "end_problem_id", None) is not None:
+        selectors += 1
+
+    if selectors == 1:
+        if (getattr(args, "start_problem_id", None) is None) != (getattr(args, "end_problem_id", None) is None):
+            raise SystemExit(f"{command_name} needs both --start-problem-id and --end-problem-id.\nExample: {example}")
+        return
+
+    raise SystemExit(
+        f"{command_name} needs exactly one problem selector: --problem-id, --problem-ids, or --start-problem-id/--end-problem-id.\n"
+        f"Example: {example}"
+    )
+
+
+def require_launch_setting(
+    *,
+    cli_value: str | int | None,
+    env_name: str,
+    flag_name: str,
+    example: str,
+) -> None:
+    env_value = os.environ.get(env_name)
+    if cli_value is not None or env_value:
+        return
+    raise SystemExit(f"{flag_name} is required.\nExample: {example}")
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    require_launch_setting(
+        cli_value=args.hardware_name,
+        env_name="HARDWARE_NAME",
+        flag_name="--hardware-name",
+        example="./kb run --tool codex --hardware-name H100 --problem-id 1",
+    )
+    env = env_with_common_overrides(args)
+    run([str(REPO_ROOT / "scripts" / "run_agent_problem.sh")], env=env)
+    return 0
+
+
+def cmd_range(args: argparse.Namespace) -> int:
+    require_launch_setting(
+        cli_value=args.hardware_name,
+        env_name="HARDWARE_NAME",
+        flag_name="--hardware-name",
+        example="./kb range --tool codex --hardware-name H100 --start-problem-id 1 --end-problem-id 10",
+    )
+    env = env_with_common_overrides(args)
+    run([str(REPO_ROOT / "scripts" / "run_agent_range.sh")], env=env)
+    return 0
+
+
+def find_submit_command() -> str:
+    for candidate in ("ybatch", "sbatch"):
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    raise SystemExit("Neither ybatch nor sbatch is available on PATH, so Slurm submission is unavailable.")
+
+
+def build_ybatch_jobscript(base_script: Path, resource: str) -> Path:
+    original = base_script.read_text(encoding="utf-8")
+    handle = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        suffix=".sh",
+        prefix="kb-ybatch-",
+        delete=False,
+    )
+    with handle:
+        if original.startswith("#!"):
+            first_line, remainder = original.split("\n", 1)
+            handle.write(first_line + "\n")
+            handle.write(f"#YBATCH -r {resource}\n")
+            handle.write(remainder)
+        else:
+            handle.write(f"#YBATCH -r {resource}\n")
+            handle.write(original)
+    os.chmod(handle.name, 0o755)
+    return Path(handle.name)
+
+
+def split_ybatch_submit_args(raw_args: list[str]) -> tuple[list[str], list[str]]:
+    front_args: list[str] = []
+    tail_args: list[str] = []
+    index = 0
+
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "-d":
+            if index + 1 >= len(raw_args):
+                raise SystemExit(
+                    "When ybatch is active, --sbatch-arg=-d must be followed by another "
+                    "--sbatch-arg with the dependency value."
+                )
+            front_args.extend(raw_args[index : index + 2])
+            index += 2
+            continue
+
+        tail_args.append(arg)
+        index += 1
+
+    return front_args, tail_args
+
+
+def cmd_submit(args: argparse.Namespace) -> int:
+    require_launch_setting(
+        cli_value=args.hardware_name,
+        env_name="HARDWARE_NAME",
+        flag_name="--hardware-name",
+        example="./kb submit --partition h100 --hardware-name H100 --tool codex --problem-id 1",
+    )
+    require_launch_setting(
+        cli_value=args.partition,
+        env_name="KB_PARTITION",
+        flag_name="--partition",
+        example="./kb submit --partition h100 --hardware-name H100 --tool codex --problem-id 1",
+    )
+    require_problem_selection(
+        args,
+        command_name="./kb submit",
+        example="./kb submit --partition h100 --hardware-name H100 --tool codex --problem-id 1",
+    )
+
+    env = env_with_common_overrides(args)
+    if args.problem_id is not None:
+        env["PROBLEM_IDS"] = str(args.problem_id)
+    elif args.problem_ids:
+        env["PROBLEM_IDS"] = args.problem_ids
+    else:
+        env["START_PROBLEM_ID"] = str(args.start_problem_id)
+        env["END_PROBLEM_ID"] = str(args.end_problem_id)
+
+    (REPO_ROOT / "slurm-out").mkdir(parents=True, exist_ok=True)
+    (REPO_ROOT / "slurm-err").mkdir(parents=True, exist_ok=True)
+
+    submit_bin = find_submit_command()
+    submit_name = Path(submit_bin).name
+    base_script = REPO_ROOT / "scripts" / "run_agent_problem.slurm.sh"
+    submit_script = base_script
+
+    if submit_name == "ybatch":
+        resource = args.ybatch_resource or os.environ.get("KB_YBATCH_RESOURCE")
+        if not resource:
+            raise SystemExit(
+                "--ybatch-resource is required when ybatch is the active submit command.\n"
+                "Example: ./kb submit --partition h100 --hardware-name H100 --ybatch-resource h100_1 --tool codex --problem-id 1"
+            )
+        submit_script = build_ybatch_jobscript(base_script, resource)
+
+    common_submit_args: list[str] = ["--export=ALL"]
+    partition = args.partition or os.environ.get("KB_PARTITION")
+    if partition:
+        common_submit_args.extend(["--partition", partition])
+    if args.run_name:
+        common_submit_args.extend(["--job-name", args.run_name])
+    if args.gpus is not None:
+        common_submit_args.append(f"--gres=gpu:{args.gpus}")
+    if args.time:
+        common_submit_args.extend(["--time", args.time])
+    if args.account:
+        common_submit_args.extend(["--account", args.account])
+    if args.qos:
+        common_submit_args.extend(["--qos", args.qos])
+    if args.constraint:
+        common_submit_args.extend(["--constraint", args.constraint])
+    if submit_name == "ybatch":
+        front_args, tail_args = split_ybatch_submit_args(args.sbatch_arg)
+        submit_cmd = [submit_bin, str(submit_script)]
+        submit_cmd.extend(front_args)
+        submit_cmd.extend(common_submit_args)
+        submit_cmd.extend(tail_args)
+    else:
+        submit_cmd = [submit_bin]
+        submit_cmd.extend(common_submit_args)
+        for extra_arg in args.sbatch_arg:
+            submit_cmd.append(extra_arg)
+        submit_cmd.append(str(submit_script))
+
+    try:
+        if args.dry_run:
+            print(shell_join(submit_cmd))
+            if submit_script != base_script:
+                print()
+                print(f"# Generated ybatch wrapper: {submit_script}")
+                print(submit_script.read_text(encoding="utf-8"))
+            return 0
+        run(submit_cmd, env=env)
+    finally:
+        if submit_script != base_script:
+            submit_script.unlink(missing_ok=True)
+    return 0
+
+
+def cmd_summarize_run(args: argparse.Namespace) -> int:
+    env = base_env()
+    run([str(REPO_ROOT / "scripts" / "kbharness"), "summarize-run", "--run-name", args.run_name], env=env)
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="kb", description="Repo-local KernelBench harness helper.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    setup = subparsers.add_parser("setup", help="Install requirements into a uv-managed virtual environment.")
+    setup.add_argument(
+        "--python",
+        help="Python interpreter or version selector for uv. Defaults to 3.10.",
+    )
+    setup.add_argument("--venv-dir", type=Path, default=DEFAULT_VENV_DIR)
+    setup.add_argument("--gpu-extras", action="store_true", help="Install KernelBench[gpu] extras.")
+    setup.add_argument(
+        "--pip-arg",
+        action="append",
+        default=[],
+        help="Extra argument to forward to uv pip install. Repeat as needed.",
+    )
+    setup.set_defaults(func=cmd_setup)
+
+    common_run = argparse.ArgumentParser(add_help=False)
+    common_run.add_argument("--data-root")
+    common_run.add_argument("--tool", choices=("codex", "claude"))
+    common_run.add_argument("--run-name")
+    common_run.add_argument("--level", type=int)
+    common_run.add_argument("--dataset-src")
+    common_run.add_argument("--model")
+    common_run.add_argument("--time-budget-minutes", type=int)
+    common_run.add_argument(
+        "--hardware-name",
+        help="KernelBench timings subdirectory to use. Required unless HARDWARE_NAME is already set.",
+    )
+    common_run.add_argument("--kernelbench-root")
+    common_run.add_argument("--timings-dir")
+    common_run.add_argument("--precision")
+
+    run_cmd = subparsers.add_parser("run", parents=[common_run], help="Run one problem.")
+    run_cmd.add_argument("--problem-id", type=int)
+    run_cmd.set_defaults(func=cmd_run)
+
+    range_cmd = subparsers.add_parser("range", parents=[common_run], help="Run multiple problems.")
+    range_group = range_cmd.add_mutually_exclusive_group()
+    range_group.add_argument("--problem-ids", help="Comma-separated problem ids.")
+    range_group.add_argument("--start-problem-id", type=int)
+    range_cmd.add_argument("--end-problem-id", type=int)
+    range_cmd.add_argument("--max-parallel-solvers", type=int)
+    range_cmd.set_defaults(func=cmd_range)
+
+    submit_cmd = subparsers.add_parser("submit", parents=[common_run], help="Submit a Slurm job for one problem or a range.")
+    submit_group = submit_cmd.add_mutually_exclusive_group()
+    submit_group.add_argument("--problem-id", type=int)
+    submit_group.add_argument("--problem-ids", help="Comma-separated problem ids.")
+    submit_group.add_argument("--start-problem-id", type=int)
+    submit_cmd.add_argument("--end-problem-id", type=int)
+    submit_cmd.add_argument("--max-parallel-solvers", type=int)
+    submit_cmd.add_argument("--partition", help="Slurm partition to submit to. Required unless KB_PARTITION is set.")
+    submit_cmd.add_argument("--gpus", type=int, default=1, help="Number of GPUs to request from Slurm. Defaults to 1.")
+    submit_cmd.add_argument("--time", help="Slurm walltime, for example 13:00:00.")
+    submit_cmd.add_argument("--account", help="Slurm account name.")
+    submit_cmd.add_argument("--qos", help="Slurm QoS.")
+    submit_cmd.add_argument("--constraint", help="Slurm constraint expression.")
+    submit_cmd.add_argument(
+        "--ybatch-resource",
+        help="Site-local ybatch resource name, only needed when ybatch is the active submit command.",
+    )
+    submit_cmd.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the final submit command instead of executing it.",
+    )
+    submit_cmd.add_argument(
+        "--sbatch-arg",
+        action="append",
+        default=[],
+        help="Additional raw submit argument to forward to ybatch/sbatch. Repeat as needed.",
+    )
+    submit_cmd.set_defaults(func=cmd_submit)
+
+    summary = subparsers.add_parser("summarize-run", help="Summarize one archived run.")
+    summary.add_argument("--run-name", required=True)
+    summary.set_defaults(func=cmd_summarize_run)
+
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    try:
+        return int(args.func(args))
+    except subprocess.CalledProcessError as exc:
+        return int(exc.returncode)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

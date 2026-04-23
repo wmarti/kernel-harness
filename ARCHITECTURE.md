@@ -15,7 +15,11 @@ The harness is responsible for:
 - recording attempts, traces, status, completion, and profiler outputs
 - aggregating archived results through `summarize-run`
 
-The harness is **not** responsible for downloading KernelBench on demand at launch time. The preferred setup is to vendor the official KernelBench repository under `third_party/KernelBench/` and install both repos into the same active environment ahead of time.
+The harness is responsible for vendoring the official KernelBench repository under `third_party/KernelBench/`, and that vendored copy may carry local harness-specific fixes until upstream equivalents land. The harness is **not** responsible for downloading KernelBench on demand at launch time.
+
+The clean user-facing repo entrypoint is `./kb`. It provides a small setup, run, range, and submit surface while the lower-level shell scripts and Python CLI stay available underneath it. `./kb setup` uses `uv` to provision a Python 3.10 environment under `./.venv` by default.
+
+The committed submission support stays intentionally narrow: `./kb submit` wraps a generic Slurm submission flow and uses `ybatch` only when that command is already present on PATH. On clusters with a site-local `ybatch` wrapper, users must still pass the site-local resource name explicitly. The harness does not probe cluster topology or choose hardware automatically.
 
 ## Documentation audiences
 
@@ -89,6 +93,12 @@ It is safe to delete `state/` only when no run is active.
 ## Shared tool-private config
 
 The workspace is solver-visible. Tool-private config and auth live outside it.
+
+The launcher and wrappers do not require an installed `kbharness` console script. The repo ships a local `scripts/kbharness` wrapper that runs `python -m kernel_bench_experiment_agents.cli` against the repo source tree, and `./kb setup` provisions the harness into a `uv`-managed virtual environment.
+
+After `./kb setup`, the chosen interpreter is recorded in repo-root `./.kb-python`, and the shell launchers reuse that exact Python instead of blindly preferring `./.venv`.
+
+At the moment, the effective Python floor and ceiling come from vendored KernelBench, whose current `pyproject.toml` pins `requires-python = "==3.10.*"`.
 
 - Codex uses `CODEX_HOME=state/config/codex/`
 - Claude uses `CLAUDE_CONFIG_DIR=state/config/claude/`

@@ -26,7 +26,7 @@ def workspace_wrapper_common() -> str:
         KBHARNESS_CLI="kbharness"
 
         if ! command -v "${KBHARNESS_CLI}" >/dev/null 2>&1; then
-          echo "kbharness is not on PATH. Install this repo into the active KernelBench environment first (uv pip install -e .)." >&2
+          echo "kbharness is not on PATH. Launch through ./kb run or scripts/run_agent_problem.sh so the repo-local wrapper is exported on PATH." >&2
           exit 1
         fi
         """

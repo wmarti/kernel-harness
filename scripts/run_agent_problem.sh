@@ -10,7 +10,7 @@
 #
 # Common overrides:
 #   DATA_ROOT=/path/for/archive-and-state   (defaults to ./ from the launch directory)
-#   RUN_NAME=kernelbench-codex-h100-v3
+#   RUN_NAME=kernelbench-codex
 #   LEVEL=1
 #   PROBLEM_ID=1
 #   MODEL=gpt-5.4|opus-4.6
@@ -24,15 +24,19 @@ if [[ ! -f "./pyproject.toml" || ! -d "./src/kernel_bench_experiment_agents" ]];
   exit 1
 fi
 
-if [[ -x "./.venv/bin/python" ]]; then
-  export PATH="$(cd "./.venv/bin" && pwd):${PATH}"
-fi
+REPO_ROOT="$(pwd)"
+BOOTSTRAP_HINT="./kb setup"
+# shellcheck source=./scripts/kb_python.sh
+source "${REPO_ROOT}/scripts/kb_python.sh"
+PYTHON_BIN="$(resolve_repo_python "${REPO_ROOT}" "${BOOTSTRAP_HINT}")"
+export PATH="${REPO_ROOT}/scripts:${PATH}"
+export PYTHONPATH="${REPO_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
 
 DATA_ROOT="${DATA_ROOT:-.}"
 mkdir -p "${DATA_ROOT}"
 DATA_ROOT="$(cd "${DATA_ROOT}" && pwd)"
 export DATA_ROOT
-BOOTSTRAP_HINT="./scripts/bootstrap_uv.sh"
+KERNELBENCH_ROOT="${KERNELBENCH_ROOT:-}"
 
 STATE_ROOT="${DATA_ROOT}/state"
 ARCHIVE_ROOT="${DATA_ROOT}/archive"
@@ -42,7 +46,7 @@ CLAUDE_SHARED_CONFIG_DIR="${TOOL_CONFIG_ROOT}/claude"
 KBHARNESS_CLI="kbharness"
 
 prepare_shared_tool_state() {
-  python - <<'PY'
+  "${PYTHON_BIN}" - <<'PY'
 from pathlib import Path
 from kernel_bench_experiment_agents.runtime_policy import write_shared_tool_state
 from kernel_bench_experiment_agents.project import state_dir
@@ -94,7 +98,7 @@ require_harness_command() {
     return
   fi
   echo "Required command is not on PATH: ${name}" >&2
-  echo "Run ${BOOTSTRAP_HINT} or activate the environment where this harness is installed." >&2
+  echo "Run ${BOOTSTRAP_HINT} first." >&2
   exit 1
 }
 
@@ -153,7 +157,7 @@ if [[ "${TOOL}" == "claude" ]]; then
   DEFAULT_MODEL="opus-4.6"
 fi
 
-RUN_NAME="${RUN_NAME:-kernelbench-${TOOL}-h100-v3}"
+RUN_NAME="${RUN_NAME:-$(default_run_name "${TOOL}")}"
 LEVEL="${LEVEL:-1}"
 PROBLEM_ID="${PROBLEM_ID:-1}"
 DATASET_SRC="${DATASET_SRC:-local}"
@@ -175,7 +179,6 @@ if [[ -z "${HARDWARE_NAME}" ]]; then
   exit 1
 fi
 
-require_command python
 require_command flock
 require_harness_command "${KBHARNESS_CLI}"
 require_kernelbench_checkout
@@ -252,7 +255,7 @@ PREP_OUTPUT="$({
 })"
 
 WORKSPACE="$({
-  PREP_OUTPUT="${PREP_OUTPUT}" python - <<'PY'
+  PREP_OUTPUT="${PREP_OUTPUT}" "${PYTHON_BIN}" - <<'PY'
 import json
 import os
 payload = json.loads(os.environ["PREP_OUTPUT"])
@@ -283,7 +286,7 @@ start_mcp_sidecar() {
   KBH_WORKSPACE="${WORKSPACE}" \
   KBH_CLIENT_TOOL="${TOOL}" \
   KBH_MCP_EVENTS_PATH="${MCP_EVENTS_PATH}" \
-  python -m kernel_bench_experiment_agents.mcp_sidecar \
+  "${PYTHON_BIN}" -m kernel_bench_experiment_agents.mcp_sidecar \
     --socket "${MCP_SOCKET_PATH}" \
     >"${MCP_SIDECAR_STDOUT_PATH}" \
     2>"${MCP_SIDECAR_STDERR_PATH}" &
@@ -333,7 +336,7 @@ mark_budget_exhausted_if_needed() {
 
   refresh_goal_status || return 1
   exhausted="$({
-    STATUS_PATH="${status_path}" python - <<'PY'
+    STATUS_PATH="${status_path}" "${PYTHON_BIN}" - <<'PY'
 import json
 import os
 payload = json.loads(open(os.environ["STATUS_PATH"], "r", encoding="utf-8").read())
@@ -356,7 +359,7 @@ watch_budget_limit() {
     fi
     if mark_budget_exhausted_if_needed; then
       remaining="$({
-        STATUS_PATH="${BUDGET_EXHAUSTED_MARKER_PATH}" python - <<'PY'
+        STATUS_PATH="${BUDGET_EXHAUSTED_MARKER_PATH}" "${PYTHON_BIN}" - <<'PY'
 import json
 import os
 payload = json.loads(open(os.environ["STATUS_PATH"], "r", encoding="utf-8").read())
@@ -456,7 +459,7 @@ if ! "${KBHARNESS_CLI}" materialize-agent-trace \
 fi
 
 readarray -t COMPLETION_STATE < <(
-  COMPLETION_PATH="${COMPLETION_PATH}" python - <<'PY'
+  COMPLETION_PATH="${COMPLETION_PATH}" "${PYTHON_BIN}" - <<'PY'
 import json
 import os
 payload = json.loads(open(os.environ["COMPLETION_PATH"], "r", encoding="utf-8").read())

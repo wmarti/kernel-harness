@@ -5,6 +5,7 @@ build/
 artifacts/
 runs/
 .venv/
+.kb-python
 
 __pycache__/
 *.py[cod]
