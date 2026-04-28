@@ -50,33 +50,23 @@ The client-specific enforcement differs slightly:
 - **Claude** also runs from an empty scratch cwd, and its built-in local file/shell tools are explicitly denied (`Read`, `Write`, `Edit`, `MultiEdit`, `Bash`, `Glob`, `Grep`, `LS`). That means Claude reaches the problem environment only through MCP as well.
 
 
-## Install KernelBench and this harness into the same environment
+## Set up the environment
 
-Create and activate the Python environment you want to use for both repos. The important part is that **KernelBench and this harness are installed into the same active environment**.
-
-Example:
+Run setup from the harness repo root. It creates a uv-managed Python 3.10 environment, initializes the vendored KernelBench checkout, installs KernelBench and this harness, and records the selected interpreter in `.kb-python`.
 
 ```bash
-pyenv create <env-name>
-pyenv activate <env-name>
-
-cd /path/to/KernelBench
-uv pip install -e .
-
-cd /path/to/kernel-bench-experiment-agents
-uv pip install -e .
+./kb setup
 ```
 
-Before local or batch runs on cluster nodes, activate the intended Python environment and load CUDA if your cluster requires it.
+Before local or batch runs on cluster nodes, load CUDA if your cluster requires it.
 
 ```bash
-pyenv activate <env-name>
 module load cuda
 ```
 
 This harness assumes:
 
-- the official KernelBench checkout already exists
+- the vendored KernelBench checkout is initialized by `./kb setup`, or `KERNELBENCH_ROOT` points to an explicit external checkout
 - the KernelBench timing files already exist for your hardware
 - `KERNELBENCH_TIMINGS_DIR` is optional; set it only when your timing results live outside the default KernelBench timing tree
 

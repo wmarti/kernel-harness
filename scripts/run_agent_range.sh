@@ -22,6 +22,8 @@ DATA_ROOT="${DATA_ROOT:-.}"
 mkdir -p "${DATA_ROOT}"
 DATA_ROOT="$(cd "${DATA_ROOT}" && pwd)"
 export DATA_ROOT
+KERNELBENCH_ROOT="${KERNELBENCH_ROOT:-${REPO_ROOT}/third_party/KernelBench}"
+export KERNELBENCH_ROOT
 
 prepare_shared_tool_state() {
   "${PYTHON_BIN}" - <<'PY'
@@ -95,7 +97,7 @@ export DATASET_SRC="${DATASET_SRC:-local}"
 export MODEL="${MODEL:-}"
 export TIME_BUDGET_MINUTES="${TIME_BUDGET_MINUTES:-180}"
 export HARDWARE_NAME="${HARDWARE_NAME:-}"
-export KERNELBENCH_ROOT="${KERNELBENCH_ROOT:-}"
+export KERNELBENCH_ROOT="${KERNELBENCH_ROOT:-${REPO_ROOT}/third_party/KernelBench}"
 export KERNELBENCH_TIMINGS_DIR="${KERNELBENCH_TIMINGS_DIR:-}"
 export PRECISION="${PRECISION:-bf16}"
 

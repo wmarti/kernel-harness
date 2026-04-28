@@ -16,6 +16,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_VENV_DIR = REPO_ROOT / ".venv"
 CONFIGURED_PYTHON_FILE = REPO_ROOT / ".kb-python"
+VENDORED_KERNELBENCH_ROOT = REPO_ROOT / "third_party" / "KernelBench"
 
 
 def shell_join(args: list[str]) -> str:
@@ -39,6 +40,7 @@ def uv_setup_env() -> dict[str, str]:
 
 def base_env() -> dict[str, str]:
     env = os.environ.copy()
+    env.setdefault("KERNELBENCH_ROOT", str(VENDORED_KERNELBENCH_ROOT))
     script_dir = str(REPO_ROOT / "scripts")
     path_entries = [script_dir]
     if env.get("PATH"):
@@ -61,6 +63,11 @@ def require_uv() -> None:
         "  https://docs.astral.sh/uv/getting-started/installation/\n"
         "  curl -LsSf https://astral.sh/uv/install.sh | sh"
     )
+
+
+def ensure_git_submodule() -> None:
+    run(["git", "submodule", "sync", "--recursive"])
+    run(["git", "submodule", "update", "--init", "--recursive", "third_party/KernelBench"])
 
 
 def python_version_info(python_cmd: list[str]) -> tuple[int, int]:
@@ -154,12 +161,26 @@ def install_with_uv(*, python_spec: str, venv_dir: Path, pip_args: list[str]) ->
     venv_python = venv_dir / "bin" / "python"
     validate_python310([str(venv_python)])
     run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            str(venv_python),
+            *pip_args,
+            "-e",
+            str(VENDORED_KERNELBENCH_ROOT),
+        ],
+        env=uv_env,
+    )
+    run(
         ["uv", "pip", "install", "--python", str(venv_python), *pip_args, "-e", "."],
         env=uv_env,
     )
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
+    ensure_git_submodule()
     venv_dir = repo_absolute_path(args.venv_dir)
     install_with_uv(
         python_spec=args.python or "3.10",

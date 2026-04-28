@@ -15,7 +15,7 @@ The harness is responsible for:
 - recording attempts, traces, status, completion, and profiler outputs
 - aggregating archived results through `summarize-run`
 
-The harness is **not** responsible for installing KernelBench itself. KernelBench setup belongs to the official KernelBench repository and the active environment you choose to run this harness in.
+The harness initializes the vendored KernelBench checkout during `./kb setup` and installs it into the configured Python environment. Operators may still override it with an explicit external `KERNELBENCH_ROOT`.
 
 ## Documentation audiences
 
