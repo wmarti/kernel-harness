@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import ast
 
-from kernel_bench_experiment_agents.kernelbench.candidate.contract import candidate_template, normalize_candidate_template
-
 
 FORBIDDEN_IMPORT_ROOTS = {
     "ctypes",
@@ -48,6 +46,7 @@ FORBIDDEN_CALL_NAMES = {
     "torch.mm",
     "torch.matmul",
     "torch.bmm",
+    "torch.einsum",
     "torch.ops.load_library",
     "torch.cuda.Stream",
     "torch.cuda.current_stream",
@@ -59,6 +58,7 @@ FORBIDDEN_CALL_SUFFIXES = {
     ".mm",
     ".matmul",
     ".bmm",
+    ".einsum",
     ".register_buffer",
 }
 
@@ -81,6 +81,15 @@ FORBIDDEN_STRING_MARKERS = {
     "torch.cuda.stream",
 }
 
+REQUIRED_CUDA_SOURCE_MARKERS = {
+    "__global__",
+    "__device__",
+    "__shared__",
+    "cuda_runtime.h",
+    "cuda.h",
+    "<<<",
+}
+
 FORBIDDEN_REBIND_NAMES = {
     "load",
     "load_inline",
@@ -93,15 +102,32 @@ FORBIDDEN_VENDOR_MARKERS = {
     "at::cuda::blas",
     "at::cuda::getcurrentcudastream",
     "at::cuda::getdefaultcudastream",
+    "at::bmm",
+    "at::conv",
+    "at::cudnn",
+    "at::einsum",
     "at::matmul",
+    "at::mm",
     "at::native",
     "at::_ops::",
+    "aten::bmm",
+    "aten::conv",
+    "aten::cudnn",
+    "aten::einsum",
     "aten::matmul",
     "cublas",
     "cublaslt",
+    "cudnn",
     "cutlass",
     "libcublas",
+    "libcudnn",
     "torch_cudablas_check",
+    "torch::bmm",
+    "torch::conv",
+    "torch::einsum",
+    "torch::matmul",
+    "torch::mm",
+    "triton",
 }
 
 
@@ -112,22 +138,16 @@ class CandidateValidationError(ValueError):
 def validate_candidate_source(candidate_src: str) -> None:
     """Validate that candidate source matches the solution-only KernelBench contract."""
 
-    try:
-        normalized_candidate = normalize_candidate_template(candidate_src)
-        normalized_template = normalize_candidate_template(candidate_template())
-    except ValueError as exc:
-        raise CandidateValidationError(str(exc)) from exc
-    if normalized_candidate != normalized_template:
-        raise CandidateValidationError(
-            "candidate_model_new.py must keep the fixed scaffold unchanged and edit only the marked blocks. Do not add code outside the editable markers."
-        )
-
     for marker in FORBIDDEN_STRING_MARKERS:
         if marker in candidate_src:
             raise CandidateValidationError(
                 f"Candidate may not set or reference forbidden runtime marker {marker!r}."
             )
     lowered = candidate_src.lower()
+    if not any(marker in lowered for marker in REQUIRED_CUDA_SOURCE_MARKERS):
+        raise CandidateValidationError(
+            "candidate_model_new.py must include raw CUDA/C++ extension source, not only Python or PyTorch code."
+        )
     for marker in FORBIDDEN_VENDOR_MARKERS:
         if marker in lowered:
             raise CandidateValidationError(
@@ -161,6 +181,7 @@ class _CandidateValidator(ast.NodeVisitor):
     def __init__(self) -> None:
         self._saw_model_new = False
         self._saw_custom_loader = False
+        self._saw_cuda_loader_input = False
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
@@ -218,6 +239,7 @@ class _CandidateValidator(ast.NodeVisitor):
             and (call_name.endswith(".load") or call_name.endswith(".load_inline"))
         ):
             self._saw_custom_loader = True
+            self._validate_loader_call(call_name, node)
 
         if call_name in FORBIDDEN_CALL_NAMES:
             raise CandidateValidationError(
@@ -239,6 +261,13 @@ class _CandidateValidator(ast.NodeVisitor):
                     "Using out= in candidate ops is forbidden because it can reuse output buffers across evaluations."
                 )
 
+        self.generic_visit(node)
+
+    def visit_BinOp(self, node: ast.BinOp) -> None:
+        if isinstance(node.op, ast.MatMult):
+            raise CandidateValidationError(
+                "Python matrix multiplication with @ is forbidden in candidate_model_new.py."
+            )
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
@@ -263,6 +292,10 @@ class _CandidateValidator(ast.NodeVisitor):
             raise CandidateValidationError(
                 "candidate_model_new.py must build a custom CUDA/C++ extension via load_inline or load."
             )
+        if not self._saw_cuda_loader_input:
+            raise CandidateValidationError(
+                "candidate_model_new.py must pass CUDA sources to the custom extension loader."
+            )
 
     def _validate_assignment_targets(self, targets: list[ast.expr]) -> None:
         for target in targets:
@@ -281,3 +314,44 @@ class _CandidateValidator(ast.NodeVisitor):
                 raise CandidateValidationError(
                     "Torch backend flag mutation is forbidden in candidate_model_new.py."
                 )
+
+    def _validate_loader_call(self, call_name: str | None, node: ast.Call) -> None:
+        for keyword in node.keywords:
+            if keyword.arg == "build_directory":
+                raise CandidateValidationError(
+                    "Custom extension build_directory is forbidden; the harness owns build paths."
+                )
+            if (
+                keyword.arg == "with_cuda"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is False
+            ):
+                raise CandidateValidationError(
+                    "Custom extensions must be built with CUDA enabled."
+                )
+            if keyword.arg == "cuda_sources":
+                self._saw_cuda_loader_input = True
+            if keyword.arg == "sources" and _contains_cuda_source_path(keyword.value):
+                self._saw_cuda_loader_input = True
+
+        is_load_inline = call_name == "load_inline" or (
+            call_name is not None and call_name.endswith(".load_inline")
+        )
+        is_load = call_name == "load" or (
+            call_name is not None and call_name.endswith(".load")
+        )
+        if is_load_inline:
+            if len(node.args) >= 3:
+                self._saw_cuda_loader_input = True
+        elif is_load:
+            for arg in node.args:
+                if _contains_cuda_source_path(arg):
+                    self._saw_cuda_loader_input = True
+
+
+def _contains_cuda_source_path(node: ast.AST) -> bool:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value.endswith((".cu", ".cuh"))
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return any(_contains_cuda_source_path(element) for element in node.elts)
+    return False

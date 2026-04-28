@@ -136,7 +136,7 @@ def build_archive_problem_manifest(run_name: str, level: int, problem_id: int) -
             {"path": "contract/hardware.json", "purpose": "frozen hardware facts"},
             {"path": "contract/provenance.json", "purpose": "archive-only provenance for the original KernelBench checkout and baseline inputs"},
             {"path": "contract/workspace_contract.json", "purpose": "machine-readable solver contract"},
-            {"path": "contract/candidate_model_new.py", "purpose": "initial candidate scaffold shown to the solver"},
+            {"path": "contract/candidate_model_new.py", "purpose": "initial free-form candidate stub shown to the solver"},
             {"path": "contract/candidate_final.py", "purpose": "final workspace candidate captured at completion when available"},
             {"path": "contract/AGENTS.md", "purpose": "rendered solver instructions"},
             {"path": "contract/SPEC.md", "purpose": "rendered problem spec"},

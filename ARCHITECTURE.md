@@ -190,7 +190,7 @@ Important files:
 - `HARDWARE.md` — human-readable hardware facts and guidance
 - `INITIAL_PROMPT.md` — the exact initial launch prompt
 - `problem_reference.py` — local copy of the reference PyTorch problem code
-- `candidate_model_new.py` — initial solver scaffold shown at workspace creation
+- `candidate_model_new.py` — initial free-form solver stub shown at workspace creation
 - `candidate_final.py` — final captured candidate when completion exists
 - `problem.json` — machine-readable problem metadata, embedded eager/compile baseline runtimes, budget, and run identifiers
 - `hardware.json` — machine-readable hardware facts

@@ -60,7 +60,7 @@ def render_workspace_agents_md(*, contract: dict[str, Any]) -> str:
         "",
         "Tool policy:",
         "",
-        "- `write_candidate` validates the fixed scaffold and forbidden shortcuts before overwriting the candidate file; fix the exact violation it reports",
+        "- `write_candidate` validates the full candidate file for required custom CUDA/C++ extension code and forbidden shortcuts before overwriting it; fix the exact violation it reports",
         "- `complete_problem` is the only harness tool that accepts solver-supplied completion text",
         "- never overlap harness tool calls; start a new one only after the previous one has returned",
         "- `run_candidate` and `profile_ncu` may take a while; trust them and wait for them to return instead of treating them as hung",
