@@ -15,7 +15,7 @@ The harness is responsible for:
 - recording attempts, traces, status, completion, and profiler outputs
 - aggregating archived results through `summarize-run`
 
-The harness initializes the vendored KernelBench checkout during `./kb setup` and installs it into the configured Python environment. Operators may still override it with an explicit external `KERNELBENCH_ROOT`.
+The harness initializes the vendored KernelBench checkout during `./kb setup` and installs it into the configured Python environment. The same setup step builds `third_party/bin/landrun` for the later direct-runtime sandbox. Operators may still override KernelBench with an explicit external `KERNELBENCH_ROOT`.
 
 ## Documentation audiences
 

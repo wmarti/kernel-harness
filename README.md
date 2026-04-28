@@ -52,7 +52,7 @@ The client-specific enforcement differs slightly:
 
 ## Set up the environment
 
-Run setup from the harness repo root. It creates a uv-managed Python 3.10 environment, initializes the vendored KernelBench checkout, installs KernelBench and this harness, and records the selected interpreter in `.kb-python`.
+Run setup from the harness repo root. It creates a uv-managed Python 3.10 environment, initializes the vendored checkouts, builds the repo-local Landrun binary, installs KernelBench and this harness, and records the selected interpreter in `.kb-python`.
 
 ```bash
 ./kb setup

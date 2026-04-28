@@ -6,6 +6,7 @@ artifacts/
 runs/
 .venv/
 .kb-python
+third_party/bin/
 
 __pycache__/
 *.py[cod]

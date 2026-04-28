@@ -1,3 +1,6 @@
 [submodule "third_party/KernelBench"]
 	path = third_party/KernelBench
 	url = https://github.com/wmarti/KernelBench
+[submodule "third_party/landrun"]
+	path = third_party/landrun
+	url = https://github.com/Zouuup/landrun.git

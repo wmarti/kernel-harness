@@ -17,6 +17,9 @@ REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_VENV_DIR = REPO_ROOT / ".venv"
 CONFIGURED_PYTHON_FILE = REPO_ROOT / ".kb-python"
 VENDORED_KERNELBENCH_ROOT = REPO_ROOT / "third_party" / "KernelBench"
+THIRD_PARTY_BIN_DIR = REPO_ROOT / "third_party" / "bin"
+LANDRUN_ROOT = REPO_ROOT / "third_party" / "landrun"
+LANDRUN_BIN = THIRD_PARTY_BIN_DIR / "landrun"
 
 
 def shell_join(args: list[str]) -> str:
@@ -41,8 +44,10 @@ def uv_setup_env() -> dict[str, str]:
 def base_env() -> dict[str, str]:
     env = os.environ.copy()
     env.setdefault("KERNELBENCH_ROOT", str(VENDORED_KERNELBENCH_ROOT))
+    env.setdefault("LANDRUN_BIN", env.get("LANDRUN", str(LANDRUN_BIN)))
     script_dir = str(REPO_ROOT / "scripts")
-    path_entries = [script_dir]
+    third_party_bin_dir = str(THIRD_PARTY_BIN_DIR)
+    path_entries = [script_dir, third_party_bin_dir]
     if env.get("PATH"):
         path_entries.append(env["PATH"])
     env["PATH"] = os.pathsep.join(path_entries)
@@ -67,7 +72,50 @@ def require_uv() -> None:
 
 def ensure_git_submodule() -> None:
     run(["git", "submodule", "sync", "--recursive"])
-    run(["git", "submodule", "update", "--init", "--recursive", "third_party/KernelBench"])
+    run(["git", "submodule", "update", "--init", "--recursive"])
+
+
+def require_go() -> None:
+    if shutil.which("go") is not None:
+        return
+    raise SystemExit(
+        "Go is required to build the vendored Landrun sandbox during ./kb setup, but it is not installed.\n"
+        "Install Go 1.18 or newer, then rerun ./kb setup."
+    )
+
+
+def build_landrun() -> None:
+    require_go()
+    if not (LANDRUN_ROOT / "go.mod").is_file():
+        raise SystemExit(
+            f"Vendored Landrun checkout is missing at {LANDRUN_ROOT}.\n"
+            "Run git submodule update --init --recursive, or rerun ./kb setup."
+        )
+    THIRD_PARTY_BIN_DIR.mkdir(parents=True, exist_ok=True)
+    run(
+        [
+            "go",
+            "build",
+            "-trimpath",
+            "-o",
+            str(LANDRUN_BIN),
+            "./cmd/landrun",
+        ],
+        cwd=LANDRUN_ROOT,
+    )
+    version = run_capture([str(LANDRUN_BIN), "--version"])
+    if not version.startswith("landrun version "):
+        raise SystemExit(
+            f"Vendored Landrun version check failed: expected a Landrun version string, got {version!r}."
+        )
+    print(f"Built vendored {version} at {LANDRUN_BIN}")
+
+    smoke_cmd = [str(LANDRUN_BIN), "--best-effort"]
+    for path in ("/usr/bin", "/usr/lib", "/lib", "/lib64"):
+        if Path(path).exists():
+            smoke_cmd.extend(["--rox", path])
+    smoke_cmd.append("/usr/bin/true")
+    run(smoke_cmd)
 
 
 def python_version_info(python_cmd: list[str]) -> tuple[int, int]:
@@ -181,6 +229,7 @@ def install_with_uv(*, python_spec: str, venv_dir: Path, pip_args: list[str]) ->
 
 def cmd_setup(args: argparse.Namespace) -> int:
     ensure_git_submodule()
+    build_landrun()
     venv_dir = repo_absolute_path(args.venv_dir)
     install_with_uv(
         python_spec=args.python or "3.10",

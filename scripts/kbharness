@@ -10,4 +10,5 @@ PYTHON_BIN="$(resolve_repo_python "${REPO_ROOT}" "./kb setup")"
 
 export PYTHONPATH="${REPO_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
 export KERNELBENCH_ROOT="${KERNELBENCH_ROOT:-${REPO_ROOT}/third_party/KernelBench}"
+export LANDRUN_BIN="${LANDRUN:-${LANDRUN_BIN:-${REPO_ROOT}/third_party/bin/landrun}}"
 exec "${PYTHON_BIN}" -m kernel_bench_experiment_agents.runtime.cli "$@"

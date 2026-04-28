@@ -34,6 +34,23 @@ def state_dir() -> Path:
     return ensure_dir(data_root() / "state")
 
 
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def landrun_bin(explicit: str | None = None) -> Path:
+    candidate = explicit or os.environ.get("LANDRUN") or os.environ.get("LANDRUN_BIN")
+    if candidate:
+        path = Path(candidate).expanduser().resolve()
+    else:
+        path = repo_root() / "third_party" / "bin" / "landrun"
+    if not path.exists():
+        raise RuntimeError(f"Landrun binary does not exist: {path}. Run ./kb setup first.")
+    if not os.access(path, os.X_OK):
+        raise RuntimeError(f"Landrun binary is not executable: {path}")
+    return path
+
+
 def build_dir() -> Path:
     return ensure_dir(state_dir() / "build")
 
