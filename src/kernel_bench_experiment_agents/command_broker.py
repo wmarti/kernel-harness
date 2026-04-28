@@ -27,8 +27,7 @@ from kernel_bench_experiment_agents.kernelbench.commands.status import (
     command_complete_problem,
     command_goal_status,
 )
-from kernel_bench_experiment_agents.mcp.trace import append_mcp_event
-from kernel_bench_experiment_agents.runtime.project import archive_problem_dir, build_problem_root, repo_root, state_dir
+from kernel_bench_experiment_agents.runtime.project import append_jsonl, archive_problem_dir, build_problem_root, repo_root, state_dir
 from kernel_bench_experiment_agents.workspace.paths import (
     validate_workspace_assignment,
     workspace_candidate_path,
@@ -64,7 +63,7 @@ def _append_trace_event(
     text: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> None:
-    append_mcp_event(
+    append_jsonl(
         ctx.events_path,
         {
             "tool": ctx.client_tool,

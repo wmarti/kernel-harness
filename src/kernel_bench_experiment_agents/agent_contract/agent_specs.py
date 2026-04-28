@@ -33,7 +33,7 @@ def _codex_agent_toml(spec: HelperAgentSpec) -> str:
 def _claude_agent_md(spec: HelperAgentSpec) -> str:
     tools = (
         "Read",
-        *(f"mcp__{COMMAND_MCP_SERVER_NAME}__{tool_name}" for tool_name in spec.mcp_tools),
+        *(f"mcp__{COMMAND_MCP_SERVER_NAME}__{tool_name}" for tool_name in spec.command_tools),
     )
     yaml_tools = "\n".join(f"  - {tool}" for tool in tools)
     return (

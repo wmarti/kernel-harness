@@ -18,7 +18,7 @@ from kernel_bench_experiment_agents.workspace.archive import (
 )
 from kernel_bench_experiment_agents.runtime.common import as_float
 from kernel_bench_experiment_agents.runtime.live_gpu_wait import active_live_gpu_wait_seconds
-from kernel_bench_experiment_agents.mcp.trace import load_mcp_ir_events
+from kernel_bench_experiment_agents.trace.sidecar import load_mcp_ir_events
 from kernel_bench_experiment_agents.runtime.project import now_iso, write_json, write_text
 from kernel_bench_experiment_agents.kernelbench.metrics import (
     best_correct_payload,

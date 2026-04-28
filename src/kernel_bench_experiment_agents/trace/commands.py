@@ -13,7 +13,7 @@ from kernel_bench_experiment_agents.summary.completion import (
     annotate_completion_outcomes,
     apply_trace_audit_to_completion,
 )
-from kernel_bench_experiment_agents.mcp.trace import load_mcp_ir_events
+from kernel_bench_experiment_agents.trace.sidecar import load_mcp_ir_events
 from kernel_bench_experiment_agents.runtime.project import now_iso, relative_path_within, write_json, write_text
 from kernel_bench_experiment_agents.trace.analysis import audit_trace, trace_cost_usd, trace_counts, trace_usage_summary, web_searches_from_ir
 from kernel_bench_experiment_agents.trace.ir import final_message_from_raw_events, load_trace_event_entries, materialize_trace_ir

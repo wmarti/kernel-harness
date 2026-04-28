@@ -1,10 +1,4 @@
-"""Record and load synthetic MCP tool events for one solver problem.
-
-The raw Codex/Claude client streams remain the source of truth for model turns and token usage,
-but local harness access now goes through an MCP server. This module keeps a small per-problem
-JSONL sidecar so trace counts and audit can still reason about solver-visible reads, writes, and
-wrapper-equivalent tool calls without depending on client-specific MCP trace formats.
-"""
+"""Read current command-broker sidecar trace events."""
 
 from __future__ import annotations
 
@@ -12,14 +6,6 @@ import json
 import sys
 from pathlib import Path
 from typing import Any
-
-from kernel_bench_experiment_agents.runtime.project import append_jsonl
-
-
-
-def append_mcp_event(events_path: Path, payload: dict[str, Any]) -> None:
-    append_jsonl(events_path, payload)
-
 
 
 def load_mcp_ir_events(

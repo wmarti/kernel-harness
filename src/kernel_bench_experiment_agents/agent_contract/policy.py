@@ -11,7 +11,6 @@ from pathlib import Path
 
 from kernel_bench_experiment_agents.kernelbench.candidate.contract import CANDIDATE_FILENAME
 
-MCP_SERVER_NAME = "kernelbench"
 COMMAND_MCP_SERVER_NAME = "kernelbench_commands"
 
 
@@ -33,23 +32,12 @@ class CommandToolSpec:
 
 
 @dataclass(frozen=True)
-class McpToolSpec:
-    """Describes one solver-visible MCP tool."""
-
-    name: str
-    purpose: str
-    uses_gpu: bool = False
-    read_only: bool = False
-    destructive: bool = False
-
-
-@dataclass(frozen=True)
 class HelperAgentSpec:
     """Captures the shared intent for rendered Codex and Claude helper agents."""
 
     name: str
     description: str
-    mcp_tools: tuple[str, ...]
+    command_tools: tuple[str, ...]
     read_paths: tuple[str, ...]
     summary_focus: str
 
@@ -98,39 +86,6 @@ COMMAND_TOOL_SPECS: tuple[CommandToolSpec, ...] = (
         wrapper_name="complete_problem.sh",
         purpose="record the final solver summary and end the run",
         destructive=True,
-    ),
-)
-
-MCP_TOOL_SPECS: tuple[McpToolSpec, ...] = (
-    McpToolSpec(
-        name="workspace_overview",
-        purpose="workspace_overview() -> JSON overview of the assigned problem, the fixed read-only resources, the allowed history directories, and the available MCP action tools",
-        read_only=True,
-    ),
-    McpToolSpec(
-        name="list_workspace_dir",
-        purpose="list_workspace_dir(path='samples'|'profiles') -> JSON directory listing for one allowed history directory only",
-        read_only=True,
-    ),
-    McpToolSpec(
-        name="read_workspace_file",
-        purpose="read_workspace_file(path) -> file text for one fixed resource or one listed text artifact under `samples/` or `profiles/`",
-        read_only=True,
-    ),
-    McpToolSpec(
-        name="write_candidate",
-        purpose=f"write_candidate(content) -> validate and overwrite {CANDIDATE_FILENAME}; the only writable workspace file",
-        destructive=True,
-    ),
-    *(
-        McpToolSpec(
-            name=spec.name,
-            purpose=spec.purpose,
-            uses_gpu=spec.uses_gpu,
-            read_only=spec.read_only,
-            destructive=spec.destructive,
-        )
-        for spec in COMMAND_TOOL_SPECS
     ),
 )
 
@@ -191,7 +146,7 @@ HELPER_SPECS: tuple[HelperAgentSpec, ...] = (
             "Execution-focused helper for one assigned optimization problem. "
             "The main solver should delegate measured evaluations to this helper by default so the main context stays focused on planning."
         ),
-        mcp_tools=("run_candidate", "goal_status", "best_result"),
+        command_tools=("run_candidate", "goal_status", "best_result"),
         read_paths=(
             "AGENTS.md",
             "SPEC.md",
@@ -212,7 +167,7 @@ HELPER_SPECS: tuple[HelperAgentSpec, ...] = (
             "Profiling helper for one assigned optimization problem. "
             "The main solver should delegate Nsight Compute work to this helper by default so the main context stays focused on planning."
         ),
-        mcp_tools=("profile_ncu", "goal_status"),
+        command_tools=("profile_ncu", "goal_status"),
         read_paths=(
             "AGENTS.md",
             "SPEC.md",
@@ -236,14 +191,6 @@ WORKSPACE_WRAPPER_TRACE_KEYS: dict[str, str] = {
 GPU_WRAPPER_PATHS: tuple[str, ...] = tuple(
     spec.wrapper_path for spec in COMMAND_TOOL_SPECS if spec.uses_gpu
 )
-
-
-def mcp_tool_names() -> tuple[str, ...]:
-    return tuple(spec.name for spec in MCP_TOOL_SPECS)
-
-
-def claude_mcp_tool_names() -> tuple[str, ...]:
-    return tuple(f"mcp__{MCP_SERVER_NAME}__{name}" for name in mcp_tool_names())
 
 
 def command_tool_names() -> tuple[str, ...]:

@@ -230,7 +230,7 @@ def render_initial_prompt(*, contract: dict[str, Any], baseline: dict[str, Any])
 
 
 def render_codex_helper_instructions(*, spec: Any) -> str:
-    tool_list = ", ".join(f"`{name}`" for name in spec.mcp_tools)
+    tool_list = ", ".join(f"`{name}`" for name in spec.command_tools)
     read_list = ", ".join(f"`{path}`" for path in spec.read_paths)
     return (
         f"You are a narrow delegated helper for one assigned optimization problem.\n\n"
@@ -252,7 +252,7 @@ def render_codex_helper_instructions(*, spec: Any) -> str:
 
 
 def render_claude_helper_body(*, spec: Any) -> str:
-    tool_list = ", ".join(f"`{name}`" for name in spec.mcp_tools)
+    tool_list = ", ".join(f"`{name}`" for name in spec.command_tools)
     read_list = ", ".join(f"`{path}`" for path in spec.read_paths)
     return (
         "You are a narrow delegated helper for one assigned optimization problem.\n\n"
