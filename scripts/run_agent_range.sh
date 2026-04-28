@@ -14,13 +14,17 @@ if [[ ! -f "./pyproject.toml" || ! -d "./src/kernel_bench_experiment_agents" ]];
   exit 1
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+export PYTHONPATH="${REPO_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
+
 DATA_ROOT="${DATA_ROOT:-.}"
 mkdir -p "${DATA_ROOT}"
 DATA_ROOT="$(cd "${DATA_ROOT}" && pwd)"
 export DATA_ROOT
 
 prepare_shared_tool_state() {
-  python - <<'PY'
+  "${PYTHON_BIN}" - <<'PY'
 from kernel_bench_experiment_agents.runtime.policy import write_shared_tool_state
 from kernel_bench_experiment_agents.runtime.project import state_dir
 
@@ -37,11 +41,16 @@ case "${TOOL}" in
     ;;
 esac
 
-RUN_NAME="${RUN_NAME:-kernelbench-${TOOL}-h100-v4}"
+RUN_NAME="${RUN_NAME:-kernelbench-${TOOL}-$(date -u +%Y%m%dT%H%M%SZ)}"
 LEVEL="${LEVEL:-1}"
 MAX_PARALLEL_SOLVERS="${MAX_PARALLEL_SOLVERS:-1}"
 RUN_STARTED_AT="$(date '+%Y-%m-%dT%H:%M:%S%z')"
 RUN_STARTED_EPOCH="$(date +%s)"
+
+if [[ ! "${MAX_PARALLEL_SOLVERS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "MAX_PARALLEL_SOLVERS must be a positive integer." >&2
+  exit 1
+fi
 
 if [[ -n "${PROBLEM_IDS:-}" ]]; then
   IFS=',' read -r -a PROBLEM_ID_LIST <<< "${PROBLEM_IDS}"

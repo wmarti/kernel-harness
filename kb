@@ -1,0 +1,328 @@
+#!/usr/bin/env python3
+"""Small repo-local entrypoint for setup and launch flows."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shlex
+import shutil
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parent
+DEFAULT_VENV_DIR = REPO_ROOT / ".venv"
+CONFIGURED_PYTHON_FILE = REPO_ROOT / ".kb-python"
+
+
+def shell_join(args: list[str]) -> str:
+    return " ".join(shlex.quote(part) for part in args)
+
+
+def run(cmd: list[str], *, env: dict[str, str] | None = None, cwd: Path = REPO_ROOT) -> None:
+    print(f"+ {shell_join(cmd)}")
+    subprocess.run(cmd, cwd=cwd, env=env, check=True)
+
+
+def run_capture(cmd: list[str], *, cwd: Path = REPO_ROOT) -> str:
+    return subprocess.check_output(cmd, cwd=cwd, text=True).strip()
+
+
+def uv_setup_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("UV_LINK_MODE", "copy")
+    return env
+
+
+def base_env() -> dict[str, str]:
+    env = os.environ.copy()
+    script_dir = str(REPO_ROOT / "scripts")
+    path_entries = [script_dir]
+    if env.get("PATH"):
+        path_entries.append(env["PATH"])
+    env["PATH"] = os.pathsep.join(path_entries)
+
+    pythonpath_entries = [str(REPO_ROOT / "src")]
+    if env.get("PYTHONPATH"):
+        pythonpath_entries.append(env["PYTHONPATH"])
+    env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
+    return env
+
+
+def require_uv() -> None:
+    if shutil.which("uv") is not None:
+        return
+    raise SystemExit(
+        "uv is required for ./kb setup, but it is not installed.\n"
+        "Install it first:\n"
+        "  https://docs.astral.sh/uv/getting-started/installation/\n"
+        "  curl -LsSf https://astral.sh/uv/install.sh | sh"
+    )
+
+
+def python_version_info(python_cmd: list[str]) -> tuple[int, int]:
+    output = run_capture(
+        python_cmd
+        + [
+            "-c",
+            (
+                "import json, sys; "
+                "print(json.dumps({'major': sys.version_info[0], "
+                "'minor': sys.version_info[1]}))"
+            ),
+        ]
+    )
+    payload = json.loads(output)
+    return int(payload["major"]), int(payload["minor"])
+
+
+def validate_python310(python_cmd: list[str]) -> None:
+    major, minor = python_version_info(python_cmd)
+    if (major, minor) != (3, 10):
+        raise SystemExit(
+            "KernelBench currently requires Python 3.10.x, but "
+            f"{shell_join(python_cmd)} resolved to Python {major}.{minor}."
+        )
+
+
+def remove_path(path: Path) -> None:
+    if not path.exists() and not path.is_symlink():
+        return
+    if path.is_symlink() or path.is_file():
+        path.unlink(missing_ok=True)
+        return
+
+    def _onerror(_func, _value, exc_info):
+        exc = exc_info[1]
+        if isinstance(exc, FileNotFoundError):
+            return
+        raise exc
+
+    shutil.rmtree(path, onerror=_onerror)
+
+
+def repo_absolute_path(path: Path) -> Path:
+    expanded = path.expanduser()
+    if not expanded.is_absolute():
+        expanded = REPO_ROOT / expanded
+    return Path(os.path.abspath(expanded))
+
+
+def looks_like_virtualenv(path: Path) -> bool:
+    return path.is_dir() and (path / "pyvenv.cfg").is_file() and (path / "bin" / "python").exists()
+
+
+def prepare_venv_dir(venv_dir: Path) -> Path:
+    resolved = repo_absolute_path(venv_dir)
+    if resolved == REPO_ROOT:
+        raise SystemExit("--venv-dir must not point at the repository root.")
+    if not resolved.exists() and not resolved.is_symlink():
+        return resolved
+    if resolved == DEFAULT_VENV_DIR:
+        remove_path(resolved)
+        return resolved
+    if resolved.is_symlink():
+        raise SystemExit(
+            f"--venv-dir refuses to replace an existing symlink target automatically: {resolved}\n"
+            "Choose a new directory, or remove that path yourself first."
+        )
+    if looks_like_virtualenv(resolved):
+        remove_path(resolved)
+        return resolved
+    raise SystemExit(
+        f"--venv-dir refuses to replace an existing directory that is not clearly a virtualenv: {resolved}\n"
+        "Choose a new directory, or remove that path yourself first."
+    )
+
+
+def configured_python_path(python_cmd: list[str]) -> str:
+    return run_capture(python_cmd + ["-c", "import os, sys; print(os.path.abspath(sys.executable))"])
+
+
+def write_configured_python(python_cmd: list[str]) -> None:
+    CONFIGURED_PYTHON_FILE.write_text(configured_python_path(python_cmd) + "\n", encoding="utf-8")
+
+
+def install_with_uv(*, python_spec: str, venv_dir: Path, pip_args: list[str]) -> None:
+    require_uv()
+    venv_dir = prepare_venv_dir(venv_dir)
+    uv_env = uv_setup_env()
+    run(["uv", "venv", "--python", python_spec, str(venv_dir)], env=uv_env)
+    venv_python = venv_dir / "bin" / "python"
+    validate_python310([str(venv_python)])
+    run(
+        ["uv", "pip", "install", "--python", str(venv_python), *pip_args, "-e", "."],
+        env=uv_env,
+    )
+
+
+def cmd_setup(args: argparse.Namespace) -> int:
+    venv_dir = repo_absolute_path(args.venv_dir)
+    install_with_uv(
+        python_spec=args.python or "3.10",
+        venv_dir=venv_dir,
+        pip_args=args.pip_arg,
+    )
+    write_configured_python([str(venv_dir / "bin" / "python")])
+    print()
+    print("Setup complete.")
+    print("Next step:")
+    print("  ./kb run --tool codex --hardware-name H100 --problem-id 1")
+    return 0
+
+
+def default_run_name(tool: str) -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"kernelbench-{tool}-{stamp}"
+
+
+def env_with_run_overrides(args: argparse.Namespace) -> dict[str, str]:
+    env = base_env()
+    mappings = {
+        "data_root": "DATA_ROOT",
+        "tool": "TOOL",
+        "run_name": "RUN_NAME",
+        "level": "LEVEL",
+        "problem_id": "PROBLEM_ID",
+        "dataset_src": "DATASET_SRC",
+        "model": "MODEL",
+        "time_budget_minutes": "TIME_BUDGET_MINUTES",
+        "hardware_name": "HARDWARE_NAME",
+        "kernelbench_root": "KERNELBENCH_ROOT",
+        "timings_dir": "KERNELBENCH_TIMINGS_DIR",
+        "precision": "PRECISION",
+        "problem_ids": "PROBLEM_IDS",
+        "start_problem_id": "START_PROBLEM_ID",
+        "end_problem_id": "END_PROBLEM_ID",
+        "max_parallel_solvers": "MAX_PARALLEL_SOLVERS",
+    }
+    for field, env_name in mappings.items():
+        value = getattr(args, field, None)
+        if value is not None:
+            env[env_name] = str(value)
+
+    tool = env.get("TOOL") or "codex"
+    env.setdefault("RUN_NAME", default_run_name(tool))
+    return env
+
+
+def require_launch_setting(
+    *,
+    cli_value: str | int | None,
+    env_name: str,
+    flag_name: str,
+    example: str,
+) -> None:
+    env_value = os.environ.get(env_name)
+    if cli_value is not None or env_value:
+        return
+    raise SystemExit(f"{flag_name} is required.\nExample: {example}")
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    require_launch_setting(
+        cli_value=args.hardware_name,
+        env_name="HARDWARE_NAME",
+        flag_name="--hardware-name",
+        example="./kb run --tool codex --hardware-name H100 --problem-id 1",
+    )
+    env = env_with_run_overrides(args)
+    run([str(REPO_ROOT / "scripts" / "run_agent_problem.sh")], env=env)
+    return 0
+
+
+def cmd_range(args: argparse.Namespace) -> int:
+    require_launch_setting(
+        cli_value=args.hardware_name,
+        env_name="HARDWARE_NAME",
+        flag_name="--hardware-name",
+        example="./kb range --tool codex --hardware-name H100 --start-problem-id 1 --end-problem-id 100",
+    )
+    has_list = bool(args.problem_ids or os.environ.get("PROBLEM_IDS"))
+    has_start = args.start_problem_id is not None or bool(os.environ.get("START_PROBLEM_ID"))
+    has_end = args.end_problem_id is not None or bool(os.environ.get("END_PROBLEM_ID"))
+    if not has_list and not (has_start and has_end):
+        raise SystemExit(
+            "Select problems with either --problem-ids or both --start-problem-id and --end-problem-id.\n"
+            "Example: ./kb range --tool codex --hardware-name H100 --start-problem-id 1 --end-problem-id 100"
+        )
+    if has_list and (has_start or has_end):
+        raise SystemExit("Use either --problem-ids or --start-problem-id/--end-problem-id, not both.")
+    if args.max_parallel_solvers is not None and args.max_parallel_solvers < 1:
+        raise SystemExit("--max-parallel-solvers must be a positive integer.")
+    env = env_with_run_overrides(args)
+    run([str(REPO_ROOT / "scripts" / "run_agent_range.sh")], env=env)
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="kb", description="Repo-local KernelBench harness helper.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    setup = subparsers.add_parser("setup", help="Install requirements into a uv-managed virtual environment.")
+    setup.add_argument("--python", help="Python interpreter or version selector for uv. Defaults to 3.10.")
+    setup.add_argument("--venv-dir", type=Path, default=DEFAULT_VENV_DIR)
+    setup.add_argument(
+        "--pip-arg",
+        action="append",
+        default=[],
+        help="Extra argument to forward to uv pip install. Repeat as needed.",
+    )
+    setup.set_defaults(func=cmd_setup)
+
+    run_cmd = subparsers.add_parser("run", help="Run one problem.")
+    run_cmd.add_argument("--data-root")
+    run_cmd.add_argument("--tool", choices=("codex", "claude"))
+    run_cmd.add_argument("--run-name")
+    run_cmd.add_argument("--level", type=int)
+    run_cmd.add_argument("--problem-id", type=int)
+    run_cmd.add_argument("--dataset-src")
+    run_cmd.add_argument("--model")
+    run_cmd.add_argument("--time-budget-minutes", type=int)
+    run_cmd.add_argument(
+        "--hardware-name",
+        help="KernelBench timings subdirectory to use. Required unless HARDWARE_NAME is already set.",
+    )
+    run_cmd.add_argument("--kernelbench-root")
+    run_cmd.add_argument("--timings-dir")
+    run_cmd.add_argument("--precision")
+    run_cmd.set_defaults(func=cmd_run)
+
+    range_cmd = subparsers.add_parser("range", help="Run multiple problems with the existing range runner.")
+    range_cmd.add_argument("--data-root")
+    range_cmd.add_argument("--tool", choices=("codex", "claude"))
+    range_cmd.add_argument("--run-name")
+    range_cmd.add_argument("--level", type=int)
+    range_cmd.add_argument("--problem-ids", help="Comma-separated problem ids, for example 1,4,9.")
+    range_cmd.add_argument("--start-problem-id", type=int)
+    range_cmd.add_argument("--end-problem-id", type=int)
+    range_cmd.add_argument("--max-parallel-solvers", type=int)
+    range_cmd.add_argument("--dataset-src")
+    range_cmd.add_argument("--model")
+    range_cmd.add_argument("--time-budget-minutes", type=int)
+    range_cmd.add_argument(
+        "--hardware-name",
+        help="KernelBench timings subdirectory to use. Required unless HARDWARE_NAME is already set.",
+    )
+    range_cmd.add_argument("--kernelbench-root")
+    range_cmd.add_argument("--timings-dir")
+    range_cmd.add_argument("--precision")
+    range_cmd.set_defaults(func=cmd_range)
+
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    try:
+        return int(args.func(args))
+    except subprocess.CalledProcessError as exc:
+        return int(exc.returncode)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

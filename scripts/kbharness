@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# shellcheck source=./kb_python.sh
+source "${SCRIPT_DIR}/kb_python.sh"
+PYTHON_BIN="$(resolve_repo_python "${REPO_ROOT}" "./kb setup")"
+
+export PYTHONPATH="${REPO_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
+exec "${PYTHON_BIN}" -m kernel_bench_experiment_agents.runtime.cli "$@"

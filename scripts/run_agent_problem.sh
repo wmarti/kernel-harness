@@ -24,6 +24,13 @@ if [[ ! -f "./pyproject.toml" || ! -d "./src/kernel_bench_experiment_agents" ]];
   exit 1
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=./kb_python.sh
+source "${SCRIPT_DIR}/kb_python.sh"
+PYTHON_BIN="$(resolve_repo_python "${REPO_ROOT}" "./kb setup")"
+export PYTHONPATH="${REPO_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
+
 DATA_ROOT="${DATA_ROOT:-.}"
 mkdir -p "${DATA_ROOT}"
 DATA_ROOT="$(cd "${DATA_ROOT}" && pwd)"
@@ -34,10 +41,10 @@ ARCHIVE_ROOT="${DATA_ROOT}/archive"
 TOOL_CONFIG_ROOT="${STATE_ROOT}/config"
 CODEX_SHARED_HOME="${TOOL_CONFIG_ROOT}/codex"
 CLAUDE_SHARED_CONFIG_DIR="${TOOL_CONFIG_ROOT}/claude"
-KBHARNESS_CLI="kbharness"
+KBHARNESS_CLI="${REPO_ROOT}/scripts/kbharness"
 
 prepare_shared_tool_state() {
-  python - <<'PY'
+  "${PYTHON_BIN}" - <<'PY'
 from pathlib import Path
 from kernel_bench_experiment_agents.runtime.policy import write_shared_tool_state
 from kernel_bench_experiment_agents.runtime.project import state_dir
@@ -115,7 +122,7 @@ if [[ "${TOOL}" == "claude" ]]; then
   DEFAULT_MODEL="claude-opus-4-7"
 fi
 
-RUN_NAME="${RUN_NAME:-kernelbench-${TOOL}-h100-v4}"
+RUN_NAME="${RUN_NAME:-kernelbench-${TOOL}-$(date -u +%Y%m%dT%H%M%SZ)}"
 LEVEL="${LEVEL:-1}"
 PROBLEM_ID="${PROBLEM_ID:-1}"
 DATASET_SRC="${DATASET_SRC:-local}"
@@ -218,7 +225,7 @@ PREP_OUTPUT="$({
 })"
 
 WORKSPACE="$({
-  PREP_OUTPUT="${PREP_OUTPUT}" python - <<'PY'
+  PREP_OUTPUT="${PREP_OUTPUT}" "${PYTHON_BIN}" - <<'PY'
 import json
 import os
 payload = json.loads(os.environ["PREP_OUTPUT"])
@@ -264,7 +271,7 @@ mark_budget_exhausted_if_needed() {
 
   refresh_goal_status || return 1
   exhausted="$({
-    STATUS_PATH="${status_path}" python - <<'PY'
+    STATUS_PATH="${status_path}" "${PYTHON_BIN}" - <<'PY'
 import json
 import os
 payload = json.loads(open(os.environ["STATUS_PATH"], "r", encoding="utf-8").read())
@@ -287,7 +294,7 @@ watch_budget_limit() {
     fi
     if mark_budget_exhausted_if_needed; then
       remaining="$({
-        STATUS_PATH="${BUDGET_EXHAUSTED_MARKER_PATH}" python - <<'PY'
+        STATUS_PATH="${BUDGET_EXHAUSTED_MARKER_PATH}" "${PYTHON_BIN}" - <<'PY'
 import json
 import os
 payload = json.loads(open(os.environ["STATUS_PATH"], "r", encoding="utf-8").read())
@@ -381,7 +388,7 @@ if ! "${KBHARNESS_CLI}" materialize-agent-trace \
 fi
 
 readarray -t COMPLETION_STATE < <(
-  COMPLETION_PATH="${COMPLETION_PATH}" python - <<'PY'
+  COMPLETION_PATH="${COMPLETION_PATH}" "${PYTHON_BIN}" - <<'PY'
 import json
 import os
 payload = json.loads(open(os.environ["COMPLETION_PATH"], "r", encoding="utf-8").read())
