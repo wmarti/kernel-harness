@@ -9,7 +9,7 @@ from typing import Any
 
 from kernel_bench_experiment_agents.runtime.common import as_float
 from kernel_bench_experiment_agents.kernelbench.candidate.contract import CANDIDATE_FILENAME
-from kernel_bench_experiment_agents.agent_contract.policy import LAUNCHER_TERMINAL_STATES, MCP_SERVER_NAME
+from kernel_bench_experiment_agents.agent_contract.policy import COMMAND_MCP_SERVER_NAME, LAUNCHER_TERMINAL_STATES
 
 
 def render_workspace_agents_md(*, contract: dict[str, Any]) -> str:
@@ -43,35 +43,36 @@ def render_workspace_agents_md(*, contract: dict[str, Any]) -> str:
         "",
         "Scope:",
         "",
-        "- your local filesystem sandbox is intentionally not the problem workspace",
-        f"- use only the `{MCP_SERVER_NAME}` MCP tools for local reads, candidate writes, measured runs, profiling, and completion",
+        "- your current working directory is the problem workspace",
+        "- read workspace files directly with native file tools",
+        f"- edit only `{CANDIDATE_FILENAME}`; the filesystem sandbox only permits writes to that file",
+        f"- use only the `{COMMAND_MCP_SERVER_NAME}` command MCP tools for measured runs, profiling, status, best-result lookup, and completion",
         "- do not inspect repository-maintainer docs, hidden harness storage, or tool-private config state",
         "- do not inspect generated PTX, cubins, Triton output, Inductor output, or compiler-emitted kernels for solution ideas",
         "- use `problem_reference.py` as the problem reference",
-        f"- edit only `{CANDIDATE_FILENAME}` and only through the `write_candidate` MCP tool",
         f"- the judged path is `{precision}`; internal mixed precision is allowed only if the final candidate still passes the `{precision}` correctness checks",
         "",
-        f"Allowed `{MCP_SERVER_NAME}` MCP tools:",
+        f"Allowed `{COMMAND_MCP_SERVER_NAME}` command tools:",
         "",
         *[
             f"- `{tool['name']}` — {tool['purpose']}"
-            for tool in contract["mcp_tools"]
+            for tool in contract["command_tools"]
         ],
         "",
         "Tool policy:",
         "",
-        "- `write_candidate` validates the full candidate file for required custom CUDA/C++ extension code and forbidden shortcuts before overwriting it; fix the exact violation it reports",
+        "- `run_candidate` validates the full candidate file for required custom CUDA/C++ extension code and forbidden shortcuts before executing it; fix the exact violation it reports",
         "- `complete_problem` is the only harness tool that accepts solver-supplied completion text",
         "- never overlap harness tool calls; start a new one only after the previous one has returned",
         "- `run_candidate` and `profile_ncu` may take a while; trust them and wait for them to return instead of treating them as hung",
-        "- fixed docs/code are exposed as read-only MCP resources; history browsing is limited to `samples/` and `profiles/` through `list_workspace_dir` + `read_workspace_file`",
+        "- fixed docs/code are local workspace files; history browsing is limited to `samples/` and `profiles/`",
         "- if a measured run is reported as suspicious or cheating, it does not count toward progress; discard it and keep working",
         "",
-        "Allowed reads via MCP:",
+        "Allowed local reads:",
         "",
         *[f"- `{path}`" for path in contract["reads"]],
         "",
-        "Allowed edits via MCP:",
+        "Allowed local edits:",
         "",
         *[f"- `{path}`" for path in contract["edits"]],
         "",
@@ -86,7 +87,7 @@ def render_workspace_agents_md(*, contract: dict[str, Any]) -> str:
         f"- if your runtime exposes generated helper agents, act as the planner-manager and use them proactively by default: {helper_names}",
         "- WHEN you want a measured evaluation, spawn `runner` so the main context does not get polluted by run output",
         "- WHEN you want Nsight Compute output or profile interpretation, spawn `profiler` so the main context stays focused on design decisions",
-        "- use direct MCP run/profile calls yourself only when helper spawning is unavailable",
+        "- use direct command-tool run/profile calls yourself only when helper spawning is unavailable",
         "- helper agents are execution aids, not a reason to stop or ask the user for approval",
         "",
         "Completion:",
@@ -138,7 +139,7 @@ def render_workspace_spec_md(
         f"- eager PyTorch baseline: `{baseline['eager']['runtime_ms']}` ms",
         f"- `torch.compile` baseline: `{baseline['compile']['runtime_ms']}` ms",
         "- the strongest outcome is to beat both baselines with one correct candidate",
-        f"- optimize `problem_reference.py` by editing only `{CANDIDATE_FILENAME}` through `write_candidate`",
+        f"- optimize `problem_reference.py` by editing only `{CANDIDATE_FILENAME}`",
         "- the evaluated implementation must be raw custom CUDA/C++ extension code with minimal glue; cuBLAS, CUTLASS, Triton, ATen compute helpers, and extra CUDA streams are forbidden",
         f"- correctness and runtime are evaluated on the harness `{precision}` path",
         "",
@@ -151,16 +152,16 @@ def render_workspace_spec_md(
         "",
         "## Tool loop",
         "",
-        f"1. Read the fixed problem docs/resources through the `{MCP_SERVER_NAME}` MCP server.",
-        f"2. Overwrite `{CANDIDATE_FILENAME}` through `write_candidate`.",
+        "1. Read the fixed problem docs/resources from the workspace.",
+        f"2. Overwrite `{CANDIDATE_FILENAME}`.",
         "3. Run `run_candidate`.",
-        "4. Read `GOAL_STATUS.md` again through `goal_status` or `read_workspace_file`.",
+        "4. Read `GOAL_STATUS.md` again or run `goal_status`.",
         "5. If needed, run `profile_ncu` and read `profiles/latest.summary.txt` first.",
         "6. Repeat until `complete_problem` is justified.",
         "",
         "Never overlap harness tool calls. Start a new one only after the previous one has fully returned.",
         "`run_candidate` and `profile_ncu` may take a while; trust them and wait for the result instead of treating them as hung.",
-        "If `write_candidate` or `run_candidate` reports a validation or cheating-related rejection, fix the exact issue it names; that attempt does not count.",
+        "If `run_candidate` reports a validation or cheating-related rejection, fix the exact issue it names; that attempt does not count.",
         "",
         "## Termination",
         "",
@@ -190,7 +191,7 @@ def render_workspace_spec_md(
         f"- hardware facts: `{hardware_markdown_name}`",
         "- live status: `GOAL_STATUS.md`",
         "- local mirrors of measured attempts/profiles: `samples/` and `profiles/`",
-        "- machine-readable metadata is surfaced through `workspace_overview`; raw contract JSON is not part of the solver-visible surface",
+        "- machine-readable metadata is available in local `problem.json`, `hardware.json`, and `workspace_contract.json`",
     ]
     return "\n".join(lines) + "\n"
 
@@ -211,16 +212,16 @@ def render_initial_prompt(*, contract: dict[str, Any], baseline: dict[str, Any])
         f"- total solver budget: {assignment.get('time_budget_minutes')} minutes",
         f"- judged precision path: {precision}",
         "",
-        "Start by using `workspace_overview`, then read `AGENTS.md`, `INITIAL_PROMPT.md`, `SPEC.md`, `HARDWARE.md`, and `GOAL_STATUS.md` through the harness MCP server resources.",
-        f"Stay inside the workspace surface exposed by the `{MCP_SERVER_NAME}` MCP server. Only edit `{CANDIDATE_FILENAME}` through `write_candidate`. Use `run_candidate`, `profile_ncu`, `goal_status`, `best_result`, and `complete_problem` for measured harness actions.",
+        "Start by reading `AGENTS.md`, `INITIAL_PROMPT.md`, `SPEC.md`, `HARDWARE.md`, and `GOAL_STATUS.md` from the workspace.",
+        f"Stay inside the workspace. Only edit `{CANDIDATE_FILENAME}`. Use `run_candidate`, `profile_ncu`, `goal_status`, `best_result`, and `complete_problem` for measured harness actions.",
         "Act as the planner-manager. Keep the main context focused on strategy and decision-making.",
-        "WHEN you want a measured evaluation, spawn the `runner` helper if available. WHEN you want profiling or profile interpretation, spawn the `profiler` helper if available. Fall back to direct MCP calls only when helper spawning is unavailable.",
+        "WHEN you want a measured evaluation, spawn the `runner` helper if available. WHEN you want profiling or profile interpretation, spawn the `profiler` helper if available. Fall back to direct command calls only when helper spawning is unavailable.",
         "Work independently. There is no user approval step in this run. Do not ask for permission, confirmation, or whether to continue.",
         "The benchmark contract forbids cuBLAS, CUTLASS, Triton, ATen compute helpers, and extra CUDA streams. Stay within raw custom CUDA/C++ extension code with minimal glue.",
         "Hosted WebSearch/WebFetch are restricted to docs.nvidia.com only.",
         "Never overlap harness tool calls. Start a new one only after the previous one has returned.",
         "If a strategy fails, re-read the docs, profile when useful, consult allowed NVIDIA docs when needed, and start the next strategy yourself.",
-        "If `write_candidate` or `run_candidate` says a write or run does not count because of validation or suspected cheating, discard that attempt, fix the exact issue it names, and keep going.",
+        "If `run_candidate` says a run does not count because of validation or suspected cheating, discard that attempt, fix the exact issue it names, and keep going.",
         "`run_candidate` and `profile_ncu` may take a while; trust the tool output and wait for them to finish.",
         "Do not stop early. When you are truly finished, terminate only through `complete_problem(summary=...)`.",
         "The harness will infer the measured outcome from the recorded runs.",
@@ -234,14 +235,14 @@ def render_codex_helper_instructions(*, spec: Any) -> str:
     return (
         f"You are a narrow delegated helper for one assigned optimization problem.\n\n"
         "The main solver should treat you as an execution-focused delegate, not as another planner.\n"
-        f"Use only the `{MCP_SERVER_NAME}` MCP tools: {tool_list}.\n"
-        f"Read local problem files only through `read_workspace_file`, and only for {read_list}.\n"
+        f"Use only the `{COMMAND_MCP_SERVER_NAME}` command MCP tools: {tool_list}.\n"
+        f"Read local problem files directly, and only for {read_list}.\n"
         "Do not inspect unrelated files, local config, or hidden harness state.\n"
         "Do not use ad hoc shell commands, Python snippets, or local file tools.\n"
         "Hosted WebSearch/WebFetch, if available at all, are restricted to docs.nvidia.com only.\n"
         "Benchmark constraints are strict: do not propose or use cuBLAS, CUTLASS, Triton, ATen compute helpers, torch.matmul-style shortcuts, or extra CUDA streams.\n"
-        "If one of the allowed MCP tools is slow, wait for it to finish instead of trying to inspect processes or the GPU.\n"
-        "Never start a second harness MCP call while another one is still running.\n"
+        "If one of the allowed command tools is slow, wait for it to finish instead of trying to inspect processes or the GPU.\n"
+        "Never start a second harness command while another one is still running.\n"
         "If a measured run is flagged as suspicious, cheating, or non-counting, say so plainly and tell the main solver to discard it.\n"
         "Do not edit any files unless the main agent explicitly delegated candidate writing to you.\n"
         "Work independently: do not ask the user or the main agent for permission to proceed once assigned.\n"
@@ -256,14 +257,14 @@ def render_claude_helper_body(*, spec: Any) -> str:
     return (
         "You are a narrow delegated helper for one assigned optimization problem.\n\n"
         "The main solver should treat you as an execution-focused delegate, not as another planner.\n"
-        f"Use only the `{MCP_SERVER_NAME}` MCP tools: {tool_list}.\n"
-        f"Read local problem files only through `read_workspace_file`, and only for {read_list}.\n"
+        f"Use only the `{COMMAND_MCP_SERVER_NAME}` command MCP tools: {tool_list}.\n"
+        f"Read local problem files directly, and only for {read_list}.\n"
         "Do not inspect unrelated files, local config, or hidden harness state.\n"
         "Do not use shell commands or Python snippets to inspect profiler outputs or parse files.\n"
         "Hosted WebSearch/WebFetch, if available at all, are restricted to docs.nvidia.com only.\n"
         "Benchmark constraints are strict: do not propose or use cuBLAS, CUTLASS, Triton, ATen compute helpers, torch.matmul-style shortcuts, or extra CUDA streams.\n"
-        "If one of the allowed MCP tools is slow, wait for it to finish instead of trying to inspect processes or the GPU.\n"
-        "Never start a second harness MCP call while another one is still running.\n"
+        "If one of the allowed command tools is slow, wait for it to finish instead of trying to inspect processes or the GPU.\n"
+        "Never start a second harness command while another one is still running.\n"
         "If a measured run is flagged as suspicious, cheating, or non-counting, say so plainly and tell the main solver to discard it.\n"
         "Do not edit any files unless the main agent explicitly delegated candidate writing to you.\n"
         "Work independently: do not ask the user or the main agent for permission to proceed once assigned.\n"
@@ -300,8 +301,8 @@ def render_goal_status_markdown(snapshot: dict[str, Any]) -> str:
             "- Do NOT ask the user for confirmation, approval, or whether to continue. Choose the next action yourself.",
             "- Re-read `SPEC.md` and `HARDWARE.md` before every major strategy change.",
             "- Timing and profiling are normal tools, not expensive last resorts. Use them even for small constant or layout changes.",
-            "- Never overlap MCP tool calls. Start a new harness tool call only after the previous one has fully returned.",
-            "- Harness MCP tools are authoritative. If one is slow, wait for it. Do NOT monitor it with `ps`, `pgrep`, `top`, `htop`, `nvidia-smi`, `strace`, `/proc`, or build-tree inspection.",
+            "- Never overlap command tool calls. Start a new harness tool call only after the previous one has fully returned.",
+            "- Harness command tools are authoritative. If one is slow, wait for it. Do NOT monitor it with `ps`, `pgrep`, `top`, `htop`, `nvidia-smi`, `strace`, `/proc`, or build-tree inspection.",
             "- If the latest run was discarded as suspicious, cheating, or invalid, it does not count. Fix the exact reported issue and keep working.",
             "- If stuck: call `profile_ncu`, read `HARDWARE.md`, search NVIDIA docs on docs.nvidia.com only, make a new plan, and try a new branch without asking for approval.",
             "- The benchmark contract forbids cuBLAS, CUTLASS, Triton, ATen compute helpers, and extra CUDA streams.",
@@ -372,6 +373,6 @@ def render_goal_status_markdown(snapshot: dict[str, Any]) -> str:
         "- local sample mirrors: `samples/`, `samples/best_sample.py`, `samples/best_result.json`",
         "- latest profiler mirrors: `profiles/latest.summary.txt` and `profiles/latest.details.txt`",
         "",
-        "Source of truth: measured run history plus the live solver trace. Refresh via the `goal_status` or `run_candidate` MCP tools.",
+        "Source of truth: measured run history plus the live solver trace. Refresh via the `goal_status` or `run_candidate` command tools.",
     ]
     return "\n".join(lines) + "\n"

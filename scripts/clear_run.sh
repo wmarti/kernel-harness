@@ -35,8 +35,8 @@ rm -rf \
   "${ARCHIVE_ROOT}/${RUN_NAME}" \
   "${STATE_ROOT}/build/${RUN_NAME}" \
   "${STATE_ROOT}/workspaces/${RUN_NAME}" \
-  "${STATE_ROOT}/cwd/codex/${RUN_NAME}" \
-  "${STATE_ROOT}/cwd/claude/${RUN_NAME}"
+  "${STATE_ROOT}/tool_state/${RUN_NAME}" \
+  "${STATE_ROOT}/runtime/${RUN_NAME}"
 
 rm -f \
   "${STATE_ROOT}/locks/solver/${RUN_NAME}"_level_*_problem_*.lock \

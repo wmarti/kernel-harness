@@ -408,8 +408,11 @@ def command_profile_ncu(args: argparse.Namespace) -> None:
                         )
             except Exception as exc:
                 persist_failure = exc
+                clear_live_gpu_wait_marker(live_gpu_wait_marker)
+                live_gpu_wait_marker = None
         else:
             clear_live_gpu_wait_marker(live_gpu_wait_marker)
+            live_gpu_wait_marker = None
 
     if persist_failure is not None:
         raise SystemExit(

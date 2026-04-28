@@ -26,3 +26,17 @@ resolve_repo_python() {
 
   printf '%s\n' "${python_bin}"
 }
+
+resolve_repo_landrun() {
+  local repo_root="$1"
+  local setup_hint="${2:-./kb setup}"
+  local landrun_bin="${LANDRUN:-${repo_root}/third_party/bin/landrun}"
+
+  if [[ ! -x "${landrun_bin}" ]]; then
+    echo "Configured Landrun binary is not executable: ${landrun_bin}" >&2
+    echo "Run ${setup_hint} again." >&2
+    return 1
+  fi
+
+  printf '%s\n' "${landrun_bin}"
+}

@@ -1,7 +1,7 @@
 """Render helper-agent specs from the shared harness policy.
 
-The live tool homes under `state/config/` load these helper-agent definitions, while the archive keeps
-frozen copies under `contract/helper_agents/` for inspection.
+The live tool homes under `state/tool_state/` load these helper-agent definitions, while the archive
+keeps frozen copies under `contract/helper_agents/` for inspection.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from textwrap import dedent
 
-from kernel_bench_experiment_agents.agent_contract.policy import MCP_SERVER_NAME, HELPER_SPECS, HelperAgentSpec
+from kernel_bench_experiment_agents.agent_contract.policy import COMMAND_MCP_SERVER_NAME, HELPER_SPECS, HelperAgentSpec
 from kernel_bench_experiment_agents.agent_contract.prompts import (
     render_claude_helper_body,
     render_codex_helper_instructions,
@@ -31,9 +31,11 @@ def _codex_agent_toml(spec: HelperAgentSpec) -> str:
 
 
 def _claude_agent_md(spec: HelperAgentSpec) -> str:
-    yaml_tools = "\n".join(
-        f"  - mcp__{MCP_SERVER_NAME}__{tool_name}" for tool_name in spec.mcp_tools
+    tools = (
+        "Read",
+        *(f"mcp__{COMMAND_MCP_SERVER_NAME}__{tool_name}" for tool_name in spec.mcp_tools),
     )
+    yaml_tools = "\n".join(f"  - {tool}" for tool in tools)
     return (
         "---\n"
         f"name: {spec.name}\n"
@@ -79,8 +81,14 @@ def write_archive_helper_agent_specs(*, archive_contract_dir: Path) -> list[Path
 
 def describe_helper_spec_paths() -> dict[str, list[str]]:
     return {
-        "shared_codex": [f"state/config/codex/agents/{spec.name}.toml" for spec in HELPER_SPECS],
-        "shared_claude": [f"state/config/claude/agents/{spec.name}.md" for spec in HELPER_SPECS],
+        "tool_state_codex": [
+            f"state/tool_state/<run>/level_<level>/problem_<problem>/codex/agents/{spec.name}.toml"
+            for spec in HELPER_SPECS
+        ],
+        "tool_state_claude": [
+            f"state/tool_state/<run>/level_<level>/problem_<problem>/claude/agents/{spec.name}.md"
+            for spec in HELPER_SPECS
+        ],
         "archive_codex": [f"contract/helper_agents/codex/{spec.name}.toml" for spec in HELPER_SPECS],
         "archive_claude": [f"contract/helper_agents/claude/{spec.name}.md" for spec in HELPER_SPECS],
     }

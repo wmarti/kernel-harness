@@ -7,6 +7,7 @@ import io
 import json
 import signal
 import socketserver
+import sys
 import threading
 from contextlib import redirect_stdout
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ from kernel_bench_experiment_agents.kernelbench.commands.status import (
     command_goal_status,
 )
 from kernel_bench_experiment_agents.mcp.trace import append_mcp_event
+from kernel_bench_experiment_agents.runtime.project import archive_problem_dir, build_problem_root, repo_root, state_dir
 from kernel_bench_experiment_agents.workspace.paths import (
     validate_workspace_assignment,
     workspace_candidate_path,
@@ -94,6 +96,44 @@ def _invoke(handler: Callable[[argparse.Namespace], None], namespace: argparse.N
     stdout = buffer.getvalue()
     payload = json.loads(stdout) if stdout.strip() else {}
     return stdout, payload
+
+
+def _redact_solver_text(ctx: BrokerContext, text: str) -> str:
+    replacements = {
+        str(ctx.workspace): ".",
+        str(archive_problem_dir(ctx.run_name, ctx.level, ctx.problem_id)): "<archive problem>",
+        str(build_problem_root(ctx.run_name, ctx.level, ctx.problem_id)): "<build problem>",
+        str(state_dir()): "<harness state>",
+        str(repo_root()): "<harness repo>",
+    }
+    for python_path in {sys.prefix, sys.base_prefix, str(Path(sys.executable).parent)}:
+        if python_path:
+            replacements[str(Path(python_path).expanduser().resolve())] = "<python runtime>"
+    redacted = text
+    for original, replacement in sorted(replacements.items(), key=lambda item: len(item[0]), reverse=True):
+        redacted = redacted.replace(original, replacement)
+    return redacted
+
+
+def _sanitize_solver_payload(ctx: BrokerContext, value: Any, *, key: str | None = None) -> Any:
+    if key == "traceback" and isinstance(value, str):
+        return "[traceback omitted from solver output; use the reported stderr excerpt and workspace mirrors]"
+    if isinstance(value, str):
+        return _redact_solver_text(ctx, value)
+    if isinstance(value, list):
+        return [_sanitize_solver_payload(ctx, item) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(child_key): _sanitize_solver_payload(ctx, child_value, key=str(child_key))
+            for child_key, child_value in value.items()
+        }
+    return value
+
+
+def _solver_response_stdout(ctx: BrokerContext, *, stdout: str, payload: dict[str, Any]) -> str:
+    if payload:
+        return json.dumps(_sanitize_solver_payload(ctx, payload), indent=2, sort_keys=True) + "\n"
+    return _redact_solver_text(ctx, stdout)
 
 
 def _handle_run_candidate(ctx: BrokerContext) -> tuple[str, dict[str, Any]]:
@@ -248,9 +288,14 @@ class BrokerHandler(socketserver.StreamRequestHandler):
                     text=request.get("summary") if spec.name == "complete_problem" else None,
                     metadata=_trace_metadata(spec.name, payload),
                 )
-                response = {"ok": True, "stdout": stdout, "payload": payload}
+                response = {
+                    "ok": True,
+                    "stdout": _solver_response_stdout(self.server.context, stdout=stdout, payload=payload),
+                    "payload": _sanitize_solver_payload(self.server.context, payload),
+                }
             except InvocationError as exc:
                 payload = exc.payload
+                sanitized_error = _redact_solver_text(self.server.context, str(exc))
                 try:
                     spec = command_tool_spec(str(request.get("command") or ""))
                     _append_trace_event(
@@ -258,18 +303,18 @@ class BrokerHandler(socketserver.StreamRequestHandler):
                         kind="command_execution",
                         spec=spec,
                         text=request.get("summary") if spec.name == "complete_problem" else None,
-                        metadata={**_trace_metadata(spec.name, payload), "error": str(exc)},
+                        metadata={**_trace_metadata(spec.name, payload), "error": sanitized_error},
                     )
                 except Exception:
                     pass
                 response = {
                     "ok": False,
-                    "error": str(exc),
-                    "stdout": exc.stdout,
-                    "payload": payload,
+                    "error": sanitized_error,
+                    "stdout": _solver_response_stdout(self.server.context, stdout=exc.stdout, payload=payload),
+                    "payload": _sanitize_solver_payload(self.server.context, payload),
                 }
             except Exception as exc:  # noqa: BLE001
-                response = {"ok": False, "error": str(exc)}
+                response = {"ok": False, "error": _redact_solver_text(self.server.context, str(exc))}
             self.wfile.write((json.dumps(response, sort_keys=True) + "\n").encode("utf-8"))
         finally:
             self.server.note_request_end()

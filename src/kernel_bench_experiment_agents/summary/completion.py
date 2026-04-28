@@ -44,6 +44,16 @@ def apply_trace_audit_to_completion(
     if isinstance(trace_counts, dict):
         completion_payload["trace_counts"] = trace_counts
     if audit.get("valid", True):
+        if (
+            completion_payload.get("terminal_state") == "harness_failure"
+            and completion_payload.get("reported_terminal_state")
+            and str(completion_payload.get("summary") or "").startswith("invalidated by trace audit:")
+        ):
+            completion_payload["terminal_state"] = completion_payload["reported_terminal_state"]
+            if "reported_summary" in completion_payload:
+                completion_payload["summary"] = completion_payload["reported_summary"]
+            if "reported_success" in completion_payload:
+                completion_payload["success"] = completion_payload["reported_success"]
         return completion_payload
 
     completion_payload.setdefault(

@@ -1,11 +1,11 @@
 # KernelBench agent harness
 
-A reproducible agent harness for running Codex or Claude on **one KernelBench problem at a time** through a narrow MCP boundary.
+A reproducible agent harness for running Codex or Claude on **one KernelBench problem at a time** in a Landrun-bounded workspace.
 
 It does four things:
 
 - prepares a fresh per-problem workspace and solver contract
-- exposes the problem only through fixed MCP resources plus a small action surface
+- exposes workspace files directly while routing privileged harness actions through a small command broker
 - archives every attempt, profile, trace, and completion record under `archive/`
 - scores the final result against eager and `torch.compile` baselines
 
@@ -21,7 +21,6 @@ The solver policy is not hidden in one giant prompt. It is split across a few ge
 - `AGENTS.md` — the durable top-level solver contract
 - `INITIAL_PROMPT.md` — the opening run-specific instructions
 - `GOAL_STATUS.md` — the live progress/status file the solver should re-read after measured actions
-- `workspace_overview()` — the first structured MCP overview call
 - helper-agent specs for `runner` and `profiler` — narrow delegated roles when the client runtime supports sub-agents
 
 The intended behavior is:
@@ -33,21 +32,21 @@ The intended behavior is:
 
 ## Actual solver surface
 
-For **both** Codex and Claude, the real problem environment is exposed only through the `kernelbench` MCP server. Hosted web access stays separate and tool-native.
+For **both** Codex and Claude, the solver starts in the generated problem workspace under Landrun. The workspace is read-only except for `candidate_model_new.py`. Hosted web access stays separate and tool-native.
 
 The exact live model trace is saved as `archive/.../agent/events.jsonl`. `trace_ir.json` is the normalized merged view used for counts and summaries.
 
-- fixed read-only MCP resources: `AGENTS.md`, `INITIAL_PROMPT.md`, `SPEC.md`, `HARDWARE.md`, `GOAL_STATUS.md`, `problem_reference.py`, `candidate_model_new.py`
-- bounded read tools: `list_workspace_dir` for `samples/` and `profiles/`, plus `read_workspace_file` for those history files and the fixed resources above
-- write/action tools: `write_candidate`, `run_candidate`, `profile_ncu`, `goal_status`, `best_result`, `complete_problem`
+- local read surface: generated workspace files plus `samples/` and `profiles/`
+- local write surface: `candidate_model_new.py` only
+- command tools: `run_candidate`, `profile_ncu`, `goal_status`, `best_result`, `complete_problem`
 - `goal_status` returns the live JSON status snapshot (remaining budget, attempt counts, latest discarded-attempt reason when present, best sample, baseline progress)
 - `best_result` returns the current best measured correct attempt, including `sample_id` and archive-relative artifact paths
 - native web stays separate from MCP and is limited to `docs.nvidia.com`
 
 The client-specific enforcement differs slightly:
 
-- **Codex** runs from an empty scratch cwd, with parent project-doc discovery disabled and the default shell tool disabled. There is no separate Codex deny-list for local file browsing, so the harness keeps the real workspace out of Codex’s direct local scope and exposes it only through MCP.
-- **Claude** also runs from an empty scratch cwd, and its built-in local file/shell tools are explicitly denied (`Read`, `Write`, `Edit`, `MultiEdit`, `Bash`, `Glob`, `Grep`, `LS`). That means Claude reaches the problem environment only through MCP as well.
+- **Codex** runs with shell disabled and a writable per-problem `CODEX_HOME` under `state/tool_state/`.
+- **Claude** gets native file tools but no Bash, with a per-problem `CLAUDE_CONFIG_DIR` under `state/tool_state/`.
 
 
 ## Set up the environment
@@ -74,11 +73,11 @@ This harness assumes:
 
 Run these commands from the harness repo root.
 
-The harness generates `state/config/` itself on launch. Authenticate once into repo-root tool dirs, and the harness will mirror only those repo-root auth files into `state/config/` each time it recreates shared tool state. It intentionally does not read `~/.codex` or `~/.claude`.
+The harness generates per-problem tool state under `state/tool_state/` on launch. Authenticate once into repo-root tool dirs, and the harness will mirror only those repo-root auth files into the per-problem tool state each time it prepares a run. It intentionally does not read `~/.codex` or `~/.claude`.
 
 ### Codex
 
-Preferred path: sign in once into repo-root `./.codex/`, using file-backed credentials so the harness can copy `auth.json` into `state/config/codex/` on launch.
+Preferred path: sign in once into repo-root `./.codex/`, using file-backed credentials so the harness can copy `auth.json` into per-problem `state/tool_state/.../codex/` on launch.
 
 ```bash
 mkdir -p .codex
@@ -94,7 +93,7 @@ export OPENAI_API_KEY=...
 
 ### Claude Code
 
-Preferred path: sign in once into repo-root `./.claude/`. The harness copies only `./.claude/.credentials.json` into `state/config/claude/` on launch. If a fresh `claude login` works in your normal shell but the harness does not, refresh the repo-root `./.claude/.credentials.json` file; the harness intentionally ignores `~/.claude`.
+Preferred path: sign in once into repo-root `./.claude/`. The harness copies only `./.claude/.credentials.json` into per-problem `state/tool_state/.../claude/` on launch. If a fresh `claude login` works in your normal shell but the harness does not, refresh the repo-root `./.claude/.credentials.json` file; the harness intentionally ignores `~/.claude`.
 
 ```bash
 mkdir -p .claude
@@ -110,27 +109,6 @@ export ANTHROPIC_AUTH_TOKEN=...
 # or
 export CLAUDE_CODE_OAUTH_TOKEN=...
 ```
-
-## Harness MCP smoke test
-
-Use the real harness MCP server, not a separate dev server. This prepares one real problem workspace, exports the exact `DATA_ROOT` / `KBH_*` context the harness uses, and then talks to `python -m kernel_bench_experiment_agents.mcp` through the official Python MCP client.
-
-```bash
-TOOL=codex \
-RUN_NAME=kernelbench-codex-h100-v4 \
-LEVEL=1 \
-PROBLEM_ID=1 \
-MODEL=gpt-5.4 \
-TIME_BUDGET_MINUTES=180 \
-PRECISION=bf16 \
-KERNELBENCH_ROOT=/path/to/KernelBench \
-HARDWARE_NAME=H100 \
-./scripts/test_harness_mcp.sh
-```
-
-That is the supported smoke path for the actual harness server. The real launcher uses the same shared `state/config/codex/config.toml` and forwards the per-problem MCP context (`DATA_ROOT`, `KBH_WORKSPACE`, `KBH_CLIENT_TOOL`, `KBH_MCP_EVENTS_PATH`) into the stdio MCP server through Codex `env_vars`.
-
-The shared helper agents `runner` and `profiler` are also loaded from `state/config/` when the client runtime supports them.
 
 ## Most common runs
 
@@ -242,7 +220,7 @@ The only durable copy-out root is:
 archive/<run_name>/
 ```
 
-Live workspaces, locks, shared tool config, per-problem scratch directories, and build products live under `state/` and are disposable once no run is active.
+Live workspaces, locks, per-problem tool config, runtime scratch directories, and build products live under `state/` and are disposable once no run is active.
 
 ## CLI surface
 
@@ -260,6 +238,6 @@ Read `ARCHITECTURE.md` for:
 
 - archive contents and file meanings
 - workspace contents and solver boundaries
-- shared Codex / Claude config layout under `state/config/`
-- the MCP-only local tool surface
+- per-problem Codex / Claude config layout under `state/tool_state/`
+- the Landrun direct-workspace and command-broker surface
 - how profiling, attempts, traces, and summaries are recorded

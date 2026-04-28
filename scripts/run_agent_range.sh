@@ -25,15 +25,6 @@ export DATA_ROOT
 KERNELBENCH_ROOT="${KERNELBENCH_ROOT:-${REPO_ROOT}/third_party/KernelBench}"
 export KERNELBENCH_ROOT
 
-prepare_shared_tool_state() {
-  "${PYTHON_BIN}" - <<'PY'
-from kernel_bench_experiment_agents.runtime.policy import write_shared_tool_state
-from kernel_bench_experiment_agents.runtime.project import state_dir
-
-write_shared_tool_state(state_dir() / "config")
-PY
-}
-
 TOOL="${TOOL:-codex}"
 case "${TOOL}" in
   codex|claude) ;;
@@ -89,8 +80,6 @@ report_elapsed_time() {
 trap report_elapsed_time EXIT
 
 echo "Range run ${RUN_NAME} started at ${RUN_STARTED_AT}" >&2
-prepare_shared_tool_state
-export SHARED_TOOL_STATE_PREPARED=1
 
 export DATA_ROOT TOOL RUN_NAME LEVEL
 export DATASET_SRC="${DATASET_SRC:-local}"

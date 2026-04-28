@@ -29,6 +29,8 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=./kb_python.sh
 source "${SCRIPT_DIR}/kb_python.sh"
 PYTHON_BIN="$(resolve_repo_python "${REPO_ROOT}" "./kb setup")"
+LANDRUN_BIN="$(resolve_repo_landrun "${REPO_ROOT}" "./kb setup")"
+export PATH="${REPO_ROOT}/scripts:${REPO_ROOT}/third_party/bin:${PATH}"
 export PYTHONPATH="${REPO_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
 
 DATA_ROOT="${DATA_ROOT:-.}"
@@ -40,22 +42,19 @@ export KERNELBENCH_ROOT
 
 STATE_ROOT="${DATA_ROOT}/state"
 ARCHIVE_ROOT="${DATA_ROOT}/archive"
-TOOL_CONFIG_ROOT="${STATE_ROOT}/config"
-CODEX_SHARED_HOME="${TOOL_CONFIG_ROOT}/codex"
-CLAUDE_SHARED_CONFIG_DIR="${TOOL_CONFIG_ROOT}/claude"
 KBHARNESS_CLI="${REPO_ROOT}/scripts/kbharness"
 
-prepare_shared_tool_state() {
-  "${PYTHON_BIN}" - <<'PY'
+prepare_tool_state() {
+  local config_root="$1"
+  TOOL_CONFIG_ROOT="${config_root}" "${PYTHON_BIN}" - <<'PY'
+import os
 from pathlib import Path
 from kernel_bench_experiment_agents.runtime.policy import write_shared_tool_state
-from kernel_bench_experiment_agents.runtime.project import state_dir
 
-write_shared_tool_state(state_dir() / "config")
+write_shared_tool_state(Path(os.environ["TOOL_CONFIG_ROOT"]))
 PY
 }
 
-# Stop the launched agent process tree when the budget watcher fires.
 terminate_agent_pipeline() {
   local parent_pid="$1"
 
@@ -69,6 +68,19 @@ terminate_agent_pipeline() {
       pkill -KILL -P "${parent_pid}" 2>/dev/null || true
     fi
     kill -KILL "${parent_pid}" 2>/dev/null || true
+  fi
+}
+
+cleanup_runtime() {
+  if [[ -n "${COMMAND_BROKER_PID:-}" ]] && kill -0 "${COMMAND_BROKER_PID}" 2>/dev/null; then
+    kill -TERM "${COMMAND_BROKER_PID}" 2>/dev/null || true
+    wait "${COMMAND_BROKER_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${COMMAND_SOCKET_DIR:-}" && -d "${COMMAND_SOCKET_DIR}" ]]; then
+    rm -rf "${COMMAND_SOCKET_DIR}"
+  fi
+  if [[ -n "${RUNTIME_DIR:-}" && -d "${RUNTIME_DIR}" ]]; then
+    rm -rf "${RUNTIME_DIR}"
   fi
 }
 
@@ -135,6 +147,9 @@ KERNELBENCH_TIMINGS_DIR="${KERNELBENCH_TIMINGS_DIR:-}"
 PRECISION="${PRECISION:-bf16}"
 NUM_GPU_SLOTS="$(visible_gpu_slot_count)"
 BUDGET_POLL_SECONDS=30
+TOOL_CONFIG_ROOT="${STATE_ROOT}/tool_state/${RUN_NAME}/level_${LEVEL}/problem_${PROBLEM_ID}"
+CODEX_PROBLEM_HOME="${TOOL_CONFIG_ROOT}/codex"
+CLAUDE_PROBLEM_CONFIG_DIR="${TOOL_CONFIG_ROOT}/claude"
 
 if [[ ! "${RUN_NAME}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
   echo "RUN_NAME may contain only ASCII letters, digits, dot, underscore, and hyphen." >&2
@@ -149,13 +164,9 @@ if [[ -z "${HARDWARE_NAME}" ]]; then
   exit 1
 fi
 
-require_command python
 require_command flock
 require_command "${KBHARNESS_CLI}"
-if [[ "${SHARED_TOOL_STATE_PREPARED:-0}" != "1" ]]; then
-  prepare_shared_tool_state
-fi
-export SHARED_TOOL_STATE_PREPARED=1
+prepare_tool_state "${TOOL_CONFIG_ROOT}"
 
 ARCHIVE_PROBLEM_DIR="${ARCHIVE_ROOT}/${RUN_NAME}/level_${LEVEL}/problem_${PROBLEM_ID}"
 AGENT_ARTIFACT_DIR="${ARCHIVE_PROBLEM_DIR}/agent"
@@ -182,28 +193,28 @@ fi
 # Validate authentication before mutating workspace state.
 if [[ "${TOOL}" == "codex" ]]; then
   require_command codex
-  export CODEX_HOME="${CODEX_SHARED_HOME}"
+  export CODEX_HOME="${CODEX_PROBLEM_HOME}"
   if [[ -n "${OPENAI_API_KEY:-}" ]]; then
     :
   elif ! codex login status >/dev/null 2>&1; then
     echo "Codex needs either repo-root .codex/auth.json or OPENAI_API_KEY before launch." >&2
     echo "Preferred: CODEX_HOME=\"./.codex\" codex -c cli_auth_credentials_store=file login --device-auth" >&2
-    echo "The harness copies only ./.codex/auth.json into ${CODEX_SHARED_HOME} on launch." >&2
+    echo "The harness copies only ./.codex/auth.json into ${CODEX_PROBLEM_HOME} on launch." >&2
     echo "If regular codex works but the harness does not, refresh repo-root ./.codex/auth.json; the harness intentionally ignores ~/.codex." >&2
     echo "Alternative: export OPENAI_API_KEY=..." >&2
     exit 1
   fi
 else
   require_command claude
-  export CLAUDE_CONFIG_DIR="${CLAUDE_SHARED_CONFIG_DIR}"
+  export CLAUDE_CONFIG_DIR="${CLAUDE_PROBLEM_CONFIG_DIR}"
   if [[ -n "${ANTHROPIC_API_KEY:-}" || -n "${ANTHROPIC_AUTH_TOKEN:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
     :
-  elif [[ -f "${CLAUDE_SHARED_CONFIG_DIR}/.credentials.json" ]]; then
+  elif [[ -f "${CLAUDE_PROBLEM_CONFIG_DIR}/.credentials.json" ]]; then
     :
   else
     echo "Claude Code needs either repo-root .claude/.credentials.json or exported API credentials before launch." >&2
     echo "Preferred: CLAUDE_CONFIG_DIR=\"./.claude\" claude login" >&2
-    echo "The harness copies only ./.claude/.credentials.json into ${CLAUDE_SHARED_CONFIG_DIR} on launch." >&2
+    echo "The harness copies only ./.claude/.credentials.json into ${CLAUDE_PROBLEM_CONFIG_DIR} on launch." >&2
     echo "If regular claude works but the harness does not, refresh repo-root ./.claude/.credentials.json; the harness intentionally ignores ~/.claude." >&2
     echo "Alternatives: export ANTHROPIC_API_KEY=..., ANTHROPIC_AUTH_TOKEN=..., or CLAUDE_CODE_OAUTH_TOKEN=..." >&2
     exit 1
@@ -235,6 +246,12 @@ print(payload["workspace"])
 PY
 })"
 
+WORKSPACE_CANDIDATE_PATH="${WORKSPACE}/candidate_model_new.py"
+if [[ ! -f "${WORKSPACE_CANDIDATE_PATH}" ]]; then
+  echo "Prepared workspace is missing candidate_model_new.py at ${WORKSPACE_CANDIDATE_PATH}." >&2
+  exit 1
+fi
+
 INITIAL_PROMPT_PATH="${WORKSPACE}/INITIAL_PROMPT.md"
 EVENTS_PATH="${AGENT_ARTIFACT_DIR}/events.jsonl"
 MCP_EVENTS_PATH="${AGENT_ARTIFACT_DIR}/mcp_ir_events.jsonl"
@@ -243,21 +260,168 @@ TRACE_PATH="${AGENT_ARTIFACT_DIR}/trace_ir.json"
 COMPLETION_PATH="${AGENT_ARTIFACT_DIR}/completion.json"
 WORKSPACE_COMPLETION_PATH="${WORKSPACE}/completion.json"
 BUDGET_EXHAUSTED_MARKER_PATH="${AGENT_ARTIFACT_DIR}/budget_exhausted_goal_status.json"
-TOOL_CWD="${STATE_ROOT}/cwd/${TOOL}/${RUN_NAME}/level_${LEVEL}/problem_${PROBLEM_ID}"
-rm -rf "${TOOL_CWD}"
-mkdir -p "${TOOL_CWD}"
+RUNTIME_DIR="${STATE_ROOT}/runtime/${RUN_NAME}/level_${LEVEL}/problem_${PROBLEM_ID}"
+RUNTIME_TMP_DIR="${RUNTIME_DIR}/tmp"
+LANDRUN_HOME_DIR="${RUNTIME_DIR}/home"
+COMMAND_SOCKET_ROOT="${STATE_ROOT}/s"
+mkdir -p "${COMMAND_SOCKET_ROOT}"
+COMMAND_SOCKET_DIR="$(mktemp -d -p "${COMMAND_SOCKET_ROOT}" "b.XXXXXX")"
+COMMAND_SOCKET_PATH="${COMMAND_SOCKET_DIR}/c"
+COMMAND_BROKER_STDOUT_PATH="${AGENT_ARTIFACT_DIR}/command_broker.stdout.txt"
+COMMAND_BROKER_STDERR_PATH="${AGENT_ARTIFACT_DIR}/command_broker.stderr.txt"
+RUNTIME_FINAL_MESSAGE_PATH="${RUNTIME_DIR}/final_message.txt"
+TOOL_CWD="${WORKSPACE}"
+COMMAND_BROKER_PID=""
+rm -rf "${RUNTIME_DIR}"
+mkdir -p "${RUNTIME_TMP_DIR}" "${LANDRUN_HOME_DIR}"
+trap cleanup_runtime EXIT
 
-export KBH_WORKSPACE="${WORKSPACE}"
-export KBH_CLIENT_TOOL="${TOOL}"
-export KBH_MCP_EVENTS_PATH="${MCP_EVENTS_PATH}"
+export KBH_COMMAND_SOCKET="${COMMAND_SOCKET_PATH}"
 
+start_command_broker() {
+  "${PYTHON_BIN}" -m kernel_bench_experiment_agents.command_broker \
+    --socket "${COMMAND_SOCKET_PATH}" \
+    --workspace "${WORKSPACE}" \
+    --run-name "${RUN_NAME}" \
+    --level "${LEVEL}" \
+    --problem-id "${PROBLEM_ID}" \
+    --dataset-src "${DATASET_SRC}" \
+    --kernelbench-root "${KERNELBENCH_ROOT}" \
+    --num-gpu-slots "${NUM_GPU_SLOTS}" \
+    --precision "${PRECISION}" \
+    --tool "${TOOL}" \
+    --events-path "${MCP_EVENTS_PATH}" \
+    >"${COMMAND_BROKER_STDOUT_PATH}" \
+    2>"${COMMAND_BROKER_STDERR_PATH}" &
+  COMMAND_BROKER_PID=$!
+}
+
+wait_for_command_broker() {
+  local attempts=200
+  while (( attempts > 0 )); do
+    if [[ -S "${COMMAND_SOCKET_PATH}" ]]; then
+      return 0
+    fi
+    if ! kill -0 "${COMMAND_BROKER_PID}" 2>/dev/null; then
+      echo "Launcher command broker exited before creating ${COMMAND_SOCKET_PATH}." >&2
+      [[ -s "${COMMAND_BROKER_STDERR_PATH}" ]] && cat "${COMMAND_BROKER_STDERR_PATH}" >&2
+      return 1
+    fi
+    attempts=$((attempts - 1))
+    sleep 0.1
+  done
+  echo "Timed out waiting for launcher command broker socket at ${COMMAND_SOCKET_PATH}." >&2
+  [[ -s "${COMMAND_BROKER_STDERR_PATH}" ]] && cat "${COMMAND_BROKER_STDERR_PATH}" >&2
+  return 1
+}
+
+readarray -t PYTHON_ROOTS < <(
+  "${PYTHON_BIN}" - <<'PY'
+import os
+import sys
+
+for value in (sys.prefix, sys.base_prefix):
+    print(os.path.abspath(value))
+PY
+)
+PYTHON_ENV_ROOT="${PYTHON_ROOTS[0]}"
+PYTHON_BASE_ROOT="${PYTHON_ROOTS[1]:-${PYTHON_ROOTS[0]}}"
+TOOL_BIN_PATH="$(command -v "${TOOL}")"
+TOOL_BIN_DIR="$(dirname "${TOOL_BIN_PATH}")"
+TOOL_REAL_PATH="$(readlink -f "${TOOL_BIN_PATH}")"
+TOOL_REAL_DIR="$(dirname "${TOOL_REAL_PATH}")"
+TOOL_REAL_PARENT="$(dirname "${TOOL_REAL_DIR}")"
+TOOL_REAL_GRANDPARENT="$(dirname "${TOOL_REAL_PARENT}")"
 if [[ "${TOOL}" == "codex" ]]; then
-  echo "Launching Codex from ${TOOL_CWD} with shared CODEX_HOME=${CODEX_HOME} and MCP-backed workspace access" >&2
+  TOOL_RUNTIME_HOME="${CODEX_HOME}"
 else
-  echo "Launching Claude Code from ${TOOL_CWD} with shared CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR} and MCP-backed workspace access" >&2
+  TOOL_RUNTIME_HOME="${CLAUDE_CONFIG_DIR}"
 fi
 
-rm -f "${EVENTS_PATH}" "${MCP_EVENTS_PATH}" "${FINAL_MESSAGE_PATH}" "${TRACE_PATH}" "${COMPLETION_PATH}" "${WORKSPACE_COMPLETION_PATH}" "${BUDGET_EXHAUSTED_MARKER_PATH}"
+LANDRUN_ARGS=(
+  --best-effort
+  --unrestricted-network
+  --ldd
+  --add-exec
+  --rwx /dev
+  --ro "${WORKSPACE}"
+  --rw "${WORKSPACE_CANDIDATE_PATH}"
+  --rw "${RUNTIME_DIR}"
+  --rw "${LANDRUN_HOME_DIR}"
+  --rw "${COMMAND_SOCKET_DIR}"
+  --rw "${TOOL_RUNTIME_HOME}"
+)
+for path in \
+  /bin \
+  /usr \
+  /lib \
+  /lib64 \
+  /etc \
+  /proc \
+  /sys \
+  "${PYTHON_ENV_ROOT}" \
+  "${PYTHON_BASE_ROOT}" \
+  "${TOOL_BIN_DIR}" \
+  "${TOOL_REAL_DIR}" \
+  "${TOOL_REAL_PARENT}" \
+  "${TOOL_REAL_GRANDPARENT}"
+do
+  if [[ -e "${path}" ]]; then
+    LANDRUN_ARGS+=(--rox "${path}")
+  fi
+done
+for path in /run/systemd/resolve; do
+  if [[ -e "${path}" ]]; then
+    LANDRUN_ARGS+=(--ro "${path}")
+  fi
+done
+
+append_landrun_env_if_set() {
+  local name="$1"
+  if [[ -n "${!name:-}" ]]; then
+    LANDRUN_ENV_ARGS+=(--env "${name}")
+  fi
+}
+
+LANDRUN_ENV_ARGS=(
+  --env PATH
+  --env HOME="${LANDRUN_HOME_DIR}"
+  --env XDG_RUNTIME_DIR="${LANDRUN_HOME_DIR}"
+  --env TMPDIR="${RUNTIME_TMP_DIR}"
+  --env TMP="${RUNTIME_TMP_DIR}"
+  --env TEMP="${RUNTIME_TMP_DIR}"
+  --env PYTHON="${PYTHON_BIN}"
+  --env KBH_COMMAND_SOCKET="${COMMAND_SOCKET_PATH}"
+  --env LANG="${LANG:-C.UTF-8}"
+)
+append_landrun_env_if_set LD_LIBRARY_PATH
+if [[ "${TOOL}" == "codex" ]]; then
+  LANDRUN_ENV_ARGS+=(--env CODEX_HOME="${CODEX_HOME}")
+  append_landrun_env_if_set OPENAI_API_KEY
+  append_landrun_env_if_set OPENAI_BASE_URL
+  append_landrun_env_if_set OPENAI_ORGANIZATION
+  append_landrun_env_if_set OPENAI_PROJECT
+else
+  LANDRUN_ENV_ARGS+=(--env CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR}")
+  append_landrun_env_if_set ANTHROPIC_API_KEY
+  append_landrun_env_if_set ANTHROPIC_AUTH_TOKEN
+  append_landrun_env_if_set ANTHROPIC_BASE_URL
+  append_landrun_env_if_set CLAUDE_CODE_OAUTH_TOKEN
+  append_landrun_env_if_set CLAUDE_CODE_MAX_CONTEXT_TOKENS
+  append_landrun_env_if_set CLAUDE_CODE_AUTO_COMPACT_WINDOW
+  append_landrun_env_if_set CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+fi
+
+if [[ "${TOOL}" == "codex" ]]; then
+  echo "Launching Codex from ${TOOL_CWD} under Landrun with CODEX_HOME=${CODEX_HOME} and brokered harness commands" >&2
+else
+  echo "Launching Claude Code from ${TOOL_CWD} under Landrun with CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR} and brokered harness commands" >&2
+fi
+
+rm -f "${EVENTS_PATH}" "${MCP_EVENTS_PATH}" "${FINAL_MESSAGE_PATH}" "${TRACE_PATH}" "${COMPLETION_PATH}" "${WORKSPACE_COMPLETION_PATH}" "${BUDGET_EXHAUSTED_MARKER_PATH}" "${COMMAND_BROKER_STDOUT_PATH}" "${COMMAND_BROKER_STDERR_PATH}" "${RUNTIME_FINAL_MESSAGE_PATH}"
+: > "${MCP_EVENTS_PATH}"
+start_command_broker
+wait_for_command_broker
 
 refresh_goal_status() {
   "${KBHARNESS_CLI}" goal-status \
@@ -317,33 +481,49 @@ if [[ "${TOOL}" == "codex" ]]; then
   CODEX_ARGS=(
     -a never
     --disable shell_tool
-  )
-  CODEX_ARGS+=(
     exec
-    --sandbox "workspace-write" # should always be write, since Codex runs in empty cwd anyway
-                                # it also accesses the real cwd through MCP
+    --sandbox "workspace-write"
     --cd "${TOOL_CWD}"
     --skip-git-repo-check
     --model "${MODEL}"
     --json
   )
   (
-    codex "${CODEX_ARGS[@]}" \
-      --output-last-message "${FINAL_MESSAGE_PATH}" \
-      "$(cat "${INITIAL_PROMPT_PATH}")" | tee "${EVENTS_PATH}"
+    cd "${TOOL_CWD}" && \
+      "${LANDRUN_BIN}" "${LANDRUN_ARGS[@]}" "${LANDRUN_ENV_ARGS[@]}" "${TOOL_BIN_PATH}" "${CODEX_ARGS[@]}" \
+        --output-last-message "${RUNTIME_FINAL_MESSAGE_PATH}" \
+        "$(cat "${INITIAL_PROMPT_PATH}")" | tee "${EVENTS_PATH}"
   ) &
 else
+  readarray -t CLAUDE_TOOL_FLAGS < <(
+    "${PYTHON_BIN}" - <<'PY'
+from kernel_bench_experiment_agents.runtime.policy import (
+    CLAUDE_ALLOWED_TOOL_PATTERNS,
+    CLAUDE_BUILTIN_TOOLS,
+    CLAUDE_DENIED_TOOLS,
+)
+
+print(",".join(CLAUDE_BUILTIN_TOOLS))
+print(",".join(CLAUDE_ALLOWED_TOOL_PATTERNS))
+print(",".join(CLAUDE_DENIED_TOOLS))
+PY
+  )
   CLAUDE_ARGS=(
     -p
     --verbose
     --output-format stream-json
     --no-session-persistence
+    --permission-mode dontAsk
     --setting-sources user
     --model "${MODEL}"
+    --tools "${CLAUDE_TOOL_FLAGS[0]}"
+    --allowed-tools "${CLAUDE_TOOL_FLAGS[1]}"
+    --disallowed-tools "${CLAUDE_TOOL_FLAGS[2]}"
   )
   (
-    cd "${TOOL_CWD}" && claude "${CLAUDE_ARGS[@]}" \
-      "$(cat "${INITIAL_PROMPT_PATH}")" | tee "${EVENTS_PATH}"
+    cd "${TOOL_CWD}" && \
+      "${LANDRUN_BIN}" "${LANDRUN_ARGS[@]}" "${LANDRUN_ENV_ARGS[@]}" "${TOOL_BIN_PATH}" "${CLAUDE_ARGS[@]}" \
+        < "${INITIAL_PROMPT_PATH}" | tee "${EVENTS_PATH}"
   ) &
 fi
 AGENT_PIPE_PID=$!
@@ -354,6 +534,11 @@ AGENT_EXIT=$?
 kill "${BUDGET_WATCH_PID}" 2>/dev/null || true
 wait "${BUDGET_WATCH_PID}" 2>/dev/null || true
 set -e
+
+if [[ -f "${RUNTIME_FINAL_MESSAGE_PATH}" ]]; then
+  cp -f "${RUNTIME_FINAL_MESSAGE_PATH}" "${FINAL_MESSAGE_PATH}"
+fi
+cleanup_runtime
 
 if [[ ! -f "${COMPLETION_PATH}" ]]; then
   mark_budget_exhausted_if_needed >/dev/null 2>&1 || true

@@ -179,7 +179,7 @@ def goal_status_snapshot(
             )
     if resolved:
         recommended_actions.append(
-            "Re-check SPEC.md once, then end via the `complete_problem` MCP tool with a short success summary."
+            "Re-check SPEC.md once, then end via the `complete_problem` command tool with a short success summary."
         )
     else:
         recommended_actions.extend(
@@ -190,8 +190,8 @@ def goal_status_snapshot(
                 "WHEN you are stuck or a candidate is slower than expected, use `profile_ncu`; read `profiles/latest.summary.txt` first, then `profiles/latest.details.txt` if needed.",
                 "WHEN the next optimization idea depends on NVIDIA-specific behavior, use hosted web search on docs.nvidia.com only for topics like tensor cores, WMMA, async copy/pipelining, occupancy, bank conflicts, and memory hierarchy limits. Other domains are blocked by policy.",
                 "WHEN you are choosing the next branch, inspect `samples/` and `profiles/` so you do not retry the same failed idea.",
-                "Do not end with a plain assistant message. The only valid exit path is the `complete_problem` MCP tool.",
-                "Never overlap MCP tool calls. Start a new harness tool call only after the previous one has fully returned.",
+                "Do not end with a plain assistant message. The only valid exit path is the `complete_problem` command tool.",
+                "Never overlap command tool calls. Start a new harness tool call only after the previous one has fully returned.",
                 "`run_candidate` and `profile_ncu` may take a while; wait for the tool result instead of treating them as hung.",
             ]
         )

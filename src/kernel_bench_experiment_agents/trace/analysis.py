@@ -6,12 +6,14 @@ Goal status, completion audit, and run reporting all depend on this module once 
 from __future__ import annotations
 
 import re
+import shlex
 from pathlib import Path
 from typing import Any
 
 from kernel_bench_experiment_agents.runtime.common import as_float, normalize_tool_name
 from kernel_bench_experiment_agents.agent_contract.policy import (
     ALLOWED_WEB_DOMAINS,
+    COMMAND_TOOL_SPECS,
     GPU_WRAPPER_PATHS,
     WORKSPACE_WRAPPER_TRACE_KEYS,
     workspace_edit_surface,
@@ -50,7 +52,29 @@ _FORBIDDEN_MONITORING_PREFIXES = (
 _FORBIDDEN_MONITORING_MARKERS = (
     "/proc",
 )
-_ALLOWED_CLAUDE_BASH_PREFIXES = tuple(_WORKSPACE_WRAPPER_NAMES)
+_ALLOWED_CLAUDE_BASH_COMMANDS = {spec.wrapper_path: spec for spec in COMMAND_TOOL_SPECS}
+
+
+def _is_allowed_claude_shell_command(command: str) -> bool:
+    try:
+        argv = shlex.split(command, posix=True)
+    except ValueError:
+        return False
+    if not argv:
+        return False
+
+    spec = _ALLOWED_CLAUDE_BASH_COMMANDS.get(argv[0])
+    if spec is None:
+        return False
+    if spec.name != "complete_problem":
+        return len(argv) == 1
+
+    args = argv[1:]
+    if len(args) == 1:
+        return args[0].startswith("--summary=")
+    if len(args) == 2:
+        return args[0] == "--summary"
+    return False
 
 
 # Usage accounting is tool-specific even though the returned shape is shared.
@@ -559,9 +583,7 @@ def audit_trace(
                 )
                 continue
             effective = (snippet or "").strip()
-            if not any(
-                effective.startswith(prefix) for prefix in _ALLOWED_CLAUDE_BASH_PREFIXES
-            ):
+            if not _is_allowed_claude_shell_command(effective):
                 violations.append(
                     {
                         "line": line_number,

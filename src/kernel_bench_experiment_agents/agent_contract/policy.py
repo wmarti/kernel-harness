@@ -138,8 +138,8 @@ WORKSPACE_STANDING_ORDERS: tuple[str, ...] = (
     "Act as the planner-manager for this problem. Keep the main context focused on strategy, debugging, and choosing the next branch.",
     "Work independently. There is no human approval, acceptance, or confirmation step during the run.",
     "Do not ask whether to proceed. Pick the next reasonable action yourself.",
-    "Do not end with a plain assistant message. The only valid exit is the `complete_problem` MCP tool.",
-    "Never start a second harness MCP call while another one is still running.",
+    "Do not end with a plain assistant message. The only valid exit is the `complete_problem` command tool.",
+    "Never start a second harness command while another one is still running.",
     "WHEN you want a measured evaluation, spawn the `runner` helper if available; use direct `run_candidate` yourself only when helper spawning is unavailable.",
     "WHEN you want Nsight Compute output or profile interpretation, spawn the `profiler` helper if available; use direct `profile_ncu` yourself only when helper spawning is unavailable.",
     "After every measured run or profile, re-read GOAL_STATUS.md or call `goal_status`; keep iterating if it still says UNRESOLVED.",
@@ -164,6 +164,10 @@ FIXED_WORKSPACE_RESOURCE_PATHS: tuple[str, ...] = (
     "SPEC.md",
     "HARDWARE.md",
     "GOAL_STATUS.md",
+    "goal_status.json",
+    "problem.json",
+    "hardware.json",
+    "workspace_contract.json",
     "problem_reference.py",
     CANDIDATE_FILENAME,
 )
@@ -187,7 +191,7 @@ HELPER_SPECS: tuple[HelperAgentSpec, ...] = (
             "Execution-focused helper for one assigned optimization problem. "
             "The main solver should delegate measured evaluations to this helper by default so the main context stays focused on planning."
         ),
-        mcp_tools=("read_workspace_file", "run_candidate", "goal_status", "best_result"),
+        mcp_tools=("run_candidate", "goal_status", "best_result"),
         read_paths=(
             "AGENTS.md",
             "SPEC.md",
@@ -208,7 +212,7 @@ HELPER_SPECS: tuple[HelperAgentSpec, ...] = (
             "Profiling helper for one assigned optimization problem. "
             "The main solver should delegate Nsight Compute work to this helper by default so the main context stays focused on planning."
         ),
-        mcp_tools=("read_workspace_file", "profile_ncu", "goal_status"),
+        mcp_tools=("profile_ncu", "goal_status"),
         read_paths=(
             "AGENTS.md",
             "SPEC.md",

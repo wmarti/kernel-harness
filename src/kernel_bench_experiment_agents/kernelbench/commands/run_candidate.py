@@ -40,6 +40,7 @@ from kernel_bench_experiment_agents.workspace.paths import (
     workspace_path,
     workspace_relpath,
     write_workspace_sample_copy,
+    workspace_samples_dir,
 )
 
 
@@ -47,6 +48,44 @@ def _workspace_candidate_reference(candidate_path: Path, workspace: Path | None)
     if workspace is not None:
         return workspace_relpath(candidate_path, workspace)
     return candidate_path.name
+
+
+def _workspace_sample_artifact(workspace: Path | None, sample_id: int, suffix: str) -> Path | None:
+    if workspace is None:
+        return None
+    return workspace_samples_dir(workspace) / f"sample_{sample_id}{suffix}"
+
+
+def _solver_artifact_reference(
+    *,
+    workspace: Path | None,
+    sample_id: int,
+    archive_path: Path,
+    problem_archive_root: Path,
+    suffix: str,
+) -> str:
+    workspace_path_ref = _workspace_sample_artifact(workspace, sample_id, suffix)
+    if workspace_path_ref is not None:
+        return workspace_relpath(workspace_path_ref, workspace)
+    return relative_path_within(archive_path, problem_archive_root)
+
+
+def _solver_visible_payload(payload: dict[str, Any], workspace: Path | None) -> dict[str, Any]:
+    if workspace is None:
+        return payload
+    sample_id = payload.get("sample_id")
+    if not isinstance(sample_id, int):
+        return payload
+    kernel_path = _workspace_sample_artifact(workspace, sample_id, ".py")
+    stdout_path = _workspace_sample_artifact(workspace, sample_id, ".stdout.txt")
+    stderr_path = _workspace_sample_artifact(workspace, sample_id, ".stderr.txt")
+    if kernel_path is None or stdout_path is None or stderr_path is None:
+        return payload
+    solver_payload = dict(payload)
+    solver_payload["archive_kernel_path"] = workspace_relpath(kernel_path, workspace)
+    solver_payload["stdout_path"] = workspace_relpath(stdout_path, workspace)
+    solver_payload["stderr_path"] = workspace_relpath(stderr_path, workspace)
+    return solver_payload
 
 
 def _result_warnings(
@@ -235,6 +274,15 @@ def command_run_candidate(args: argparse.Namespace) -> None:
             )
             write_text(stdout_path, completed.stdout)
             write_text(stderr_path, completed.stderr)
+            if workspace is not None:
+                write_text(
+                    _workspace_sample_artifact(workspace, sample_id, ".stdout.txt"),
+                    completed.stdout,
+                )
+                write_text(
+                    _workspace_sample_artifact(workspace, sample_id, ".stderr.txt"),
+                    completed.stderr,
+                )
             payload["gpu_id"] = lease.slot_id
             payload["gpu_device_selector"] = lease.device_selector
             payload["gpu_visible_devices"] = lease.isolated_visible_devices
@@ -243,9 +291,16 @@ def command_run_candidate(args: argparse.Namespace) -> None:
             payload["gpu_wait_seconds"] = lease.wait_seconds
 
         if completed.returncode != 0:
+            stderr_ref = _solver_artifact_reference(
+                workspace=workspace,
+                sample_id=sample_id,
+                archive_path=stderr_path,
+                problem_archive_root=problem_archive_root,
+                suffix=".stderr.txt",
+            )
             raise RuntimeError(
                 "Candidate evaluation subprocess failed "
-                f"(return code {completed.returncode}); see {stderr_path}.\n"
+                f"(return code {completed.returncode}); see {stderr_ref}.\n"
                 f"stderr excerpt:\n{excerpt(completed.stderr or completed.stdout)}"
             )
         if not runner_output_path.exists():
@@ -279,6 +334,9 @@ def command_run_candidate(args: argparse.Namespace) -> None:
                     clear_live_gpu_wait_marker(live_gpu_wait_marker)
                     live_gpu_wait_marker = None
                     if workspace is not None:
+                        workspace_json_path = _workspace_sample_artifact(workspace, sample_id, ".json")
+                        if workspace_json_path is not None:
+                            write_json(workspace_json_path, _solver_visible_payload(payload, workspace))
                         write_goal_status_files(
                             run_name=args.run_name,
                             level=args.level,
@@ -287,10 +345,13 @@ def command_run_candidate(args: argparse.Namespace) -> None:
                         )
             except Exception as exc:
                 persist_failure = exc
+                clear_live_gpu_wait_marker(live_gpu_wait_marker)
+                live_gpu_wait_marker = None
         else:
             clear_live_gpu_wait_marker(live_gpu_wait_marker)
+            live_gpu_wait_marker = None
 
-    emit_json(payload)
+    emit_json(_solver_visible_payload(payload, workspace))
     if failure is not None:
         if persist_failure is not None:
             print(

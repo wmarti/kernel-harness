@@ -9,9 +9,9 @@ from typing import Any
 
 from kernel_bench_experiment_agents.agent_contract.policy import (
     ALLOWED_WEB_DOMAINS,
+    COMMAND_TOOL_SPECS,
     HELPER_SPECS,
     LAUNCHER_TERMINAL_STATES,
-    MCP_TOOL_SPECS,
     SOLVER_TERMINAL_STATES,
     WORKSPACE_EDIT_PATHS,
     WORKSPACE_READ_PATHS,
@@ -41,7 +41,7 @@ def build_workspace_contract(*, metadata: dict[str, Any]) -> dict[str, Any]:
         },
         "reads": list(WORKSPACE_READ_PATHS),
         "edits": list(WORKSPACE_EDIT_PATHS),
-        "mcp_tools": [
+        "command_tools": [
             {
                 "name": spec.name,
                 "gpu": spec.uses_gpu,
@@ -49,7 +49,7 @@ def build_workspace_contract(*, metadata: dict[str, Any]) -> dict[str, Any]:
                 "read_only": spec.read_only,
                 "destructive": spec.destructive,
             }
-            for spec in MCP_TOOL_SPECS
+            for spec in COMMAND_TOOL_SPECS
         ],
         "helper_agents": [spec.name for spec in HELPER_SPECS],
         "behavior": {
