@@ -13,7 +13,6 @@ from kernel_bench_experiment_agents.agent_contract.policy import (
     LAUNCHER_TERMINAL_STATES,
     MCP_TOOL_SPECS,
     SOLVER_TERMINAL_STATES,
-    WORKSPACE_COMMAND_SPECS,
     WORKSPACE_EDIT_PATHS,
     WORKSPACE_READ_PATHS,
     WORKSPACE_STANDING_ORDERS,
@@ -51,15 +50,6 @@ def build_workspace_contract(*, metadata: dict[str, Any]) -> dict[str, Any]:
                 "destructive": spec.destructive,
             }
             for spec in MCP_TOOL_SPECS
-        ],
-        "backend_wrapper_commands": [
-            {
-                "name": spec.name,
-                "path": spec.path,
-                "gpu": spec.uses_gpu,
-                "purpose": spec.purpose,
-            }
-            for spec in WORKSPACE_COMMAND_SPECS
         ],
         "helper_agents": [spec.name for spec in HELPER_SPECS],
         "behavior": {
